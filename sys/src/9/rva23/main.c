@@ -285,6 +285,7 @@ main(u64int hartid, uintptr dtb)
 	uartconsinit();
 	quotefmtinstall();
 	bootargsinit();
+	boardearly();		/* board memory window and quirks, before meminit */
 	meminit();
 	print("meminit done\n");
 	confinit();

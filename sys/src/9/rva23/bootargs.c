@@ -473,6 +473,7 @@ devtreeprop(char *path, char *key, void *val, int len)
 	if(strcmp(path, "/cpus") == 0
 	   && strcmp(key, "timebase-frequency") == 0 && len >= 4)
 		timebase = beget4(p);
+	boarddtprop(path, key, p, len);	/* board-specific nodes and /chosen properties */
 	if(strncmp(path, "/chosen", 7) == 0){
 		if(strcmp(key, "bootargs") == 0){
 			if(preloadedini)	/* don't clobber a plan9.ini */
