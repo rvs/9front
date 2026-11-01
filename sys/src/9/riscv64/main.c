@@ -93,10 +93,6 @@ confinit(void)
 		conf.nmach = MAXMACH;
 	if(conf.nmach < 1)
 		conf.nmach = 1;
-	if(maxion && conf.nmach != 1){
-		print("maxion: uniprocessor bring-up; parking other harts\n");
-		conf.nmach = 1;
-	}
 
 	if(p = getconf("service")){
 		if(strcmp(p, "cpu") == 0)
@@ -193,7 +189,8 @@ void
 cpuidprint(void)
 {
 	if(maxion)
-		iprint("cpu%d: ET-SoC-1 Maxion, SBI timer, uniprocessor\n", m->machno);
+		iprint("cpu%d: ET-SoC-1 Maxion, SBI timer, %lud of %d harts\n",
+			m->machno, conf.nmach, hartcnt);
 	else
 		iprint("cpu%d: 1000MHz QEMU\n", m->machno);
 }
@@ -215,6 +212,7 @@ main(u64int hartid, uintptr dtb)
 {
 	extern void _start(void);
 	extern uintptr dtbphys;
+	Proc *initp;
 
 	dtbphys = dtb;
 
@@ -327,13 +325,16 @@ main(u64int hartid, uintptr dtb)
 	chandevreset();
 	userinit();
 	/* Wire pid 1 to cpu0: the rest of the harts are not yet cache-coherent. */
+	initp = nil;
 	{
 		Proc *p;
 		int i;
 
 		for(i = 0; (p = proctab(i)) != nil; i++)
-			if(p->pid != 0 && p->text != nil && strcmp(p->text, "*init*") == 0)
+			if(p->pid != 0 && p->text != nil && strcmp(p->text, "*init*") == 0){
 				procwired(p, 0);
+				initp = p;
+			}
 	}
 	mpinit();
 	u64int tm = rdtime();
@@ -351,6 +352,13 @@ main(u64int hartid, uintptr dtb)
 	 * Re-arm the clock here, matching the secondary path.
 	 */
 	timerset(0);
+	/*
+	 * On Maxion, the wiring above only has to outlast the boot hart's
+	 * own setup: unwire init before cpu0 first schedules (so before it
+	 * can fork), letting the processes it starts run on every hart.
+	 */
+	if(maxion && initp != nil)
+		initp->wired = 0;
 	schedinit();
 }
 

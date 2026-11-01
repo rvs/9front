@@ -249,7 +249,7 @@ struct
 
 extern uintptr ktzero, vdram;		/* runtime memory layout; set in relocfixup */
 extern uintptr klimit;
-extern int maxion;			/* ET-SoC-1, initial uniprocessor port */
+extern int maxion;			/* ET-SoC-1 Maxion (4 harts, no Sstc/Zicbom/Svpbmt) */
 
 extern register Mach* m;			/* R7 */
 extern register Proc* up;			/* R6 */

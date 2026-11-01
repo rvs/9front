@@ -119,10 +119,30 @@ sbiclearipi(void)
 	return sbicall(3, 0, 0, nil, nil);
 }
 
+enum {
+	Sbiipi	= 0x735049,		/* sPI */
+};
+
+/*
+ * Prefer the v0.2 sPI extension, which takes the hart mask by value
+ * (bit k is hart base+k), over the legacy call, which makes the SBI
+ * read the mask through our page tables with MPRV set; that path is
+ * subject to the Maxion LSU's spurious-fault erratum (GPD-1478).
+ * Probing twice is harmless, so racing harts need no lock.
+ */
 vlong
 sbisendipi(uvlong *hart)
 {
-	/* this is the legacy call, not the newer sPI extension */
+	static int havespi = -1;
+	uvlong xargs[2];
+
+	if(havespi < 0)
+		havespi = sbiprobeext(Sbiipi) != 0;
+	if(havespi){
+		xargs[0] = 0;		/* a1: hart_mask_base */
+		xargs[1] = 0;
+		return sbicall(Sbiipi, 0, *hart, nil, xargs);
+	}
 	return sbicall(4, 0, (uintptr)hart, nil, nil);
 }
 

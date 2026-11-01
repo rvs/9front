@@ -32,7 +32,11 @@ enum {
 	 */
 	Nplicsrc	= 221,
 
-	/* ET-SoC-1: shared priorities, but only hart 0 S-mode is ours. */
+	/*
+	 * ET-SoC-1: shared priorities, but only hart 0 S-mode is ours.
+	 * Other harts never enable Seie, so all external interrupts are
+	 * claimed and dispatched on cpu0.
+	 */
 	Maxionctxt	= 0,
 	Maxionnsrc	= 42,		/* source IDs 1..41 */
 	Maxionuart	= 15,
@@ -71,8 +75,8 @@ plicinit(void)
 		panic("intrinit: soc.plic not set");
 	size = PLICSIZE;
 	if(maxion){
-		if(m->hartid != 0 || m->machno != 0 || conf.nmach != 1)
-			panic("plicinit: Maxion requires hart 0 only");
+		if(m->hartid != 0 || m->machno != 0)
+			panic("plicinit: Maxion requires hart 0");
 		if(base != 0x10000000)
 			panic("plicinit: unexpected Maxion PLIC base %#p", base);
 		plicctxt = Maxionctxt;
@@ -227,7 +231,11 @@ plicintrdisable(int irq, void (*f)(Ureg*, void*), void *a, int tbdf, char*)
 	if(maxion){
 		if(tbdf != BUSUNKNOWN || irq != Maxionuart)
 			return;
-		/* UP: exclude dispatch while unlinking and freeing a handler. */
+		/*
+		 * Dispatch (plicirq, cpu0 only) walks vctl without vctllock:
+		 * only cpu0, at splhi, may free an unlinked handler.  Another
+		 * cpu leaks it, since cpu0 may be running it now.
+		 */
 		pl = splhi();
 		lock(&vctllock);
 		for(l = &vctl[irq]; (v = *l) != nil; l = &v->next)
@@ -240,7 +248,8 @@ plicintrdisable(int irq, void (*f)(Ureg*, void*), void *a, int tbdf, char*)
 			coherence();
 		}
 		unlock(&vctllock);
-		free(v);
+		if(m->machno == 0)
+			free(v);
 		splx(pl);
 		return;
 	}

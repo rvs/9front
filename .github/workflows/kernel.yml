@@ -60,21 +60,25 @@ jobs:
         run: $FS/boot-test.sh out/9rv64cpuwait
 
       # the Maxion hart has no Svpbmt, Zicbom or Sstc: neither may qemu's;
-      # maxion.bootrc runs the smoke test before its shell
+      # maxion.bootrc runs the smoke test before its shell, here on one
+      # hart and then on four, Maxion's count (and hart ids 0-3)
       - name: Boot test 9maxion
         run: |
-          qemu-system-riscv64 -nodefaults -M virt -bios default \
-            -cpu rv64,svpbmt=false,zicbom=false,sstc=false -m 1G -smp 1 \
-            -kernel out/9maxion -nic none -display none -monitor none \
-            -append 'console=0 user=glenda *maxion=1 *ncpu=1 *uartpoll=1' \
-            -serial file:maxion.console -daemonize -pidfile maxion.pid
-          trap 'kill $(cat maxion.pid)' EXIT
-          for i in $(seq 120); do
-            grep -qa MAXION-SMOKE-PASS maxion.console && break
-            sleep 1
+          for n in 1 4; do
+            c=maxion-smp$n.console
+            qemu-system-riscv64 -nodefaults -M virt -bios default \
+              -cpu rv64,svpbmt=false,zicbom=false,sstc=false -m 1G -smp $n \
+              -kernel out/9maxion -nic none -display none -monitor none \
+              -append "console=0 user=glenda *maxion=1 *ncpu=$n *uartpoll=1" \
+              -serial file:$c -daemonize -pidfile maxion.pid
+            for i in $(seq 180); do
+              grep -qa MAXION-SMOKE-PASS $c && break
+              sleep 1
+            done
+            kill $(cat maxion.pid)
+            tr -d '\r' <$c
+            grep -qa "MAXION-SMOKE-PASS: .*, $n cpu" $c
           done
-          tr -d '\r' <maxion.console
-          grep -qa MAXION-SMOKE-PASS maxion.console
 
       - name: Upload kernels
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -93,6 +97,6 @@ jobs:
           path: |
             /tmp/tmp.*/console
             /tmp/tmp.*/log
-            maxion.console
+            maxion-smp*.console
           if-no-files-found: ignore
           retention-days: 14

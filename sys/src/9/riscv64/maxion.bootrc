@@ -1,5 +1,5 @@
 #!/bin/rc
-# Diskless, single-hart bring-up: no storage/network/DMA probes.
+# Diskless bring-up: no storage/network/DMA probes.
 if(~ $#user 0)
 	user=glenda
 echo -n $user >/dev/hostowner
@@ -10,6 +10,6 @@ aux/kbdfs -q -s cons /dev/eia0
 ramfs -m /tmp
 prompt=('maxion9% ' '	')
 echo '9front Maxion RAM-root ready'
-echo 'CPU-only bring-up: no persistent disk, network, DMA, or SMP.'
+echo 'CPU-only bring-up: no persistent disk, network, or DMA.'
 smoke
 exec /bin/rc -i </dev/cons >/dev/cons >[2=1]

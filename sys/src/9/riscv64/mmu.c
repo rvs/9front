@@ -14,6 +14,7 @@ enum {
 // UZERO.
 uintptr klimit = UZERO;
 u64int mmumode;
+uintptr bootsatp;	/* boot hart's kernel satp; cpumain (l.s) loads it */
 
 void
 mmu1init(void)
@@ -182,6 +183,7 @@ maxionmap(uintptr limit)
 	}
 	mmumode = 9ULL<<60;
 	satp = ((uintptr)sv48>>12) | mmumode;
+	bootsatp = satp;
 	coherence();
 	wsatp(satp);
 	if(rsatp() != satp)
@@ -255,8 +257,9 @@ kmapram(uintptr, uintptr limit)
 		if (Spew)print("sv39:%p is %p\n", &sv39[i], sv39[i]);
 	}
 
-	wsatp(((uintptr)sv39>>12)|mmumode);
-
+	bootsatp = ((uintptr)sv39>>12)|mmumode;
+	coherence();
+	wsatp(bootsatp);
 }
 
 uintptr
@@ -464,6 +467,34 @@ mmuwalk(uintptr va, int level)
 if (0)print("RETURN &%p[0x%x] = ", table, x);
 if (0)print("%p\n", &table[x]);
 	return &table[x];
+}
+
+/*
+ * Is user address va mapped user-writable in this hart's current page
+ * tables?  Unlike mmuwalk, never allocates.  Call at splhi so the answer
+ * holds until splx: only this proc edits its page tables (putmmu, on its
+ * own hart), and procflushmmu waits for this hart to tick or switch
+ * before freeing anything the mapping refers to.  putmmu flushes this
+ * hart's TLB after every update, so a valid PTE cannot fault.
+ */
+int
+userwritable(uintptr va)
+{
+	uintptr *table, pte;
+	int i;
+
+	if(va < UZERO || va >= USTKTOP)
+		return 0;
+	table = m->mmutop;
+	for(i = PTLEVELS-1; i > 0; i--){
+		pte = table[vpn(va, i)];
+		if((pte & PTEVALID) == 0 || (pte & (PTEREAD|PTEWRITE|PTEEXEC)) != 0)
+			return 0;
+		table = kmapaddr((pte>>10)<<12);
+	}
+	pte = table[vpn(va, 0)];
+	return (pte & (PTEVALID|PTEWRITE|PTEUSER|PTEACCESSED|PTEDIRTY)) ==
+		(PTEVALID|PTEWRITE|PTEUSER|PTEACCESSED|PTEDIRTY);
 }
 
 u64int *

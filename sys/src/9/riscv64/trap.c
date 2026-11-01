@@ -326,6 +326,7 @@ if (TrapSys)	{
 }
 //	m->turnedfpoff = 0;
 
+	m->syscall++;			/* per-cpu count in /dev/sysstat */
 	/* syscall may change ureg->pc, so save a copy. */
 	pc = ureg->pc;
 /*	if (getsp() % sizeof(vlong) != 0)

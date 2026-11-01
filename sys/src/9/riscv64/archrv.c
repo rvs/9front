@@ -407,6 +407,72 @@ cachedinvse(void *vaddr, int len)
 	cacheop(cboinval, vaddr, len);
 }
 
+/*
+ * ET-SoC-1 erratum RTLMAX-635 (3.33): a store to a Maxion DCache line in
+ * the E state can be lost when a coherence probe hits the same set.  On
+ * that SoC only LR installs E, so with other harts probing, the kernel
+ * must never execute LR; locks are AMOSWAP (tas) and counters AMOADD
+ * already.  Emulate compare-and-swap with a hashed spin lock instead.
+ * The lock provides atomicity because every concurrent writer of a
+ * cmpswap word in the kernel uses cmpswap too: Ref.ref (incref, decref),
+ * pidhashtab[].pid and user semaphores, which only the kernel changes.
+ * Hold it at splhi so no interrupt handler on this hart spins on it.
+ *
+ * A fault may sleep, so it must not happen with the lock held.  For a
+ * user address (semaphores), first take any fault with an AMO add of
+ * zero, which is a store as far as permissions go but changes nothing,
+ * then confirm at splhi that the page is still mapped writable.
+ */
+enum {
+	Ncaslock	= 64,		/* power of 2 */
+};
+
+static struct {
+	long	key;
+	uchar	pad[Cachelinesz-sizeof(long)];
+} caslock[Ncaslock];
+
+static int
+amocmpswap(long *addr, long old, long new)
+{
+	long *key;
+	uintptr a;
+	Mpl pl;
+	int r;
+
+	a = (uintptr)addr;
+	key = &caslock[(a>>2 ^ a>>8) & (Ncaslock-1)].key;
+	for(;;){
+		if(!iskaddr(a))
+			aadd((int*)addr, 0);
+		pl = splhi();
+		if(iskaddr(a) || userwritable(a))
+			break;
+		splx(pl);
+	}
+	while(tas(key) != 0)
+		while(*(volatile long*)key != 0)
+			;
+	r = 0;
+	if(*(volatile long*)addr == old){
+		*(volatile long*)addr = new;
+		r = 1;
+	}
+	coherence();
+	*(volatile long*)key = 0;
+	coherence();
+	splx(pl);
+	return r;
+}
+
+int
+cmpswap(long *addr, long old, long new)
+{
+	if(maxion)
+		return amocmpswap(addr, old, new);
+	return lrcmpswap(addr, old, new);
+}
+
 int
 ishartonline(int hart)		/* unused */
 {

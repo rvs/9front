@@ -3,7 +3,8 @@
 /* l.s */
 extern void sev(void);
 extern int tas(void *);
-extern int cmpswap(long*, long, long);
+extern int cmpswap(long*, long, long);		/* archrv.c */
+extern int lrcmpswap(long*, long, long);
 extern void coherence(void);
 extern void idlehands(void);
 extern uvlong vcycles(void);
@@ -324,6 +325,7 @@ void	sbisettimer(uvlong);
 void	sbishutdown(void);
 
 int	aadd(int *, int);
+int	userwritable(uintptr);
 ulong	amoswapw(ulong *a, ulong nv);
 uintptr	setsie(uintptr);
 uintptr	getsie(void);

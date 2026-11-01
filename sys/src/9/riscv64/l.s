@@ -130,9 +130,10 @@ _stop:
  * Secondary hart entry, started by SBI HSM (hsmstartall) at PADDR(cpumain).
  * We arrive in S-mode with paging OFF; SBI passes a0 (R10) = hartid and
  * a1 (R11) = the opaque value we supplied (also the hartid).  The kernel
- * is already relocated and its page table (sv39, identity-mapped
- * gigapages) is built by the boot hart, so we only enable paging, set up
- * this hart's Mach and stack, and enter C at cpustart().
+ * is already relocated and its identity-mapped page table is built by
+ * the boot hart, which publishes the matching satp value (Sv39 root
+ * sv39, or Maxion's Sv48 root sv48) in bootsatp; we only enable paging,
+ * set up this hart's Mach and stack, and enter C at cpustart().
  *
  * Note: not named _main — that symbol is libc's C-runtime entry point
  * (crt0), and defining our own clobbers kernel startup.
@@ -144,13 +145,10 @@ TEXT	cpumain(SB), 1, $-4
 	/*
 	 * turn on paging with the shared kernel table.  the kernel range is
 	 * identity-mapped, so the PC and SB-relative loads keep working
-	 * across the switch (the sv39 load below already relies on VA==PA
-	 * while paging is off).
+	 * across the switch (the bootsatp load below already relies on
+	 * VA==PA while paging is off).
 	 */
-	MOV	sv39(SB), R8		/* L1 table root (phys == virt) */
-	SRL	$12, R8
-	MOV	$SATP_SV39, R9
-	OR	R9, R8, R8
+	MOV	bootsatp(SB), R8	/* mode|root ppn, as the boot hart uses */
 	MOV	R8, CSR(SATP)
 	SFENCE
 
@@ -290,8 +288,11 @@ TEXT flushvatlb(SB), 1, $-4
 	WORD $0x12040073
 	RET
 
-TEXT	cas(SB), 1, $-4
-TEXT	cmpswap(SB), 1, $-4
+/*
+ * LR/SC compare-and-swap; cmpswap (archrv.c) uses it except on Maxion,
+ * where LR must not be used once other harts run (erratum RTLMAX-635).
+ */
+TEXT	lrcmpswap(SB), 1, $-4
 	MOVWU	ov+8(FP), R12
 	MOVWU	nv+(8+4)(FP), R13
 	MOV	R0, R11
