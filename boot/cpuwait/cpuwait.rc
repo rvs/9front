@@ -1,0 +1,69 @@
+#!/bin/rc
+# cpuwait boot method: a cpu server without a root file server.
+#
+#	nobootprompt='cpuwait ether /net/ether0 10.0.2.15 255.255.255.0'
+#
+# configures the network and waits for rcpu clients (drawterm);
+# each client's exported tree (drawterm -r dir) becomes the
+# root file system of the processes it starts.
+# see /rc/bin/cpuwait.service and /lib/namespace.
+
+fn configcpuwait{
+	if(~ $#* 0){
+		e=/net/ether*
+		if(! ~ $e '/net/ether*')
+			*=(ether $e(1))
+	}
+	must ip/ipconfig -p $*
+
+	# normally cs sets it from ndb, but there is no /lib/ndb
+	if(~ $#sysname 0)
+		sysname=cpuwait
+	echo -n $sysname >/dev/sysname
+
+	if(~ $#auth 0)
+		auth=`{awk -F'=' '/^[ 	]*auth=/{print $2}' /net/ndb}
+
+	# publish info in /net/ndb for factotum
+	if(! ~ $#auth 0) >> /net/ndb {
+		echo
+		echo 'ipbootinfo='
+		for(i in $auth)	echo '	auth='^$i
+	}
+
+	# keys come from nvram; without $auth bootrc skips secstore
+	auth=()
+}
+
+fn connectcpuwait{
+	# the boot file system again, for the name space that
+	# rcpu clients see until they supply their root
+	must /boot/paqfs -q -s -S bootfs /boot/bootfs.paq
+
+	@{
+		# start the listener with a clean environment
+		x=($cputype $sysname)
+		rfork E
+		cputype=$x(1)
+		objtype=$x(1)
+		sysname=$x(2)
+		service=cpu
+		exec aux/listen1 'tcp!*!17019' /rc/bin/cpuwait.service
+	} &
+	echo 'cpuwait: waiting for rcpu clients on tcp!*!17019'
+
+	# fshalt(8): no file server runs here, so there is nothing
+	# to sync or halt; the machine may be turned off at once
+	fn fshalt{
+		echo
+		echo done halting
+	}
+
+	# the console gets a shell in the boot name space
+	prompt=('cpuwait# ' '	')
+	while()
+		rc -i
+}
+
+mcpuwait=(configcpuwait connectcpuwait)
+mt=(mcpuwait $mt)

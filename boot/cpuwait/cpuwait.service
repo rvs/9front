@@ -1,0 +1,38 @@
+#!/bin/rc
+# rcpu service of a cpuwait server; run by aux/listen1 as none.
+# as /rc/bin/service/tcp17019, except that the tree the client
+# exports (/mnt/term/root, i.e. drawterm -r dir) is grafted on
+# as the root as soon as the client's script mounts /mnt/term.
+fn server {
+	rm -f /env/'fn#server'
+
+	# the first command of every rcpu client script is
+	#	mount -nc /fd/0 /mnt/term || exit
+	fn mount {
+		fn mount
+		rm -f /env/'fn#mount'
+		mount $* || exit 'mount failed'
+		if(! ~ $#* 3 || ! ~ $3 /mnt/term)
+			exit 'cpuwait: unexpected first command: mount '^$"*
+		>/mnt/term/dev/cons >[2=1] {
+			if(! test -x /mnt/term/root/$cputype/bin/rc){
+				echo 'cpuwait: client root (drawterm -r) has no /'^$cputype^'/bin/rc'
+				echo -n 'no root' >/mnt/term/env/rstatus
+				exit 'no root'
+			}
+			# the client's tree replaces the boot file system as root
+			unmount /root /
+			bind /mnt/term/root /root
+			bind -a /root /
+			bind /$cputype/bin /bin
+			bind /root/rc /rc
+			bind -a /rc/bin /bin
+			bind -qc /usr/$user/tmp /tmp
+			cat /adm/timezone/local >/env/timezone >[2]/dev/null
+			cd /usr/$user || cd /
+		}
+		status=''
+	}
+	. <{n=`{read} && ! ~ $#n 0 && read -c $n} >[2=1]
+}
+exec tlssrv -a /bin/rc -c server
