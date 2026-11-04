@@ -63,7 +63,7 @@ if [ $boot = 9fat ]; then
 	fat=boot/9fat.raw
 	if [ ! -f $fat ]; then
 		echo "boot/qemu: $fat missing" >&2
-		echo '# build it in a running guest: mk9fat' >&2
+		echo '# mk9fat, which built it, is gone until it is ported to 9front' >&2
 		exit 1
 	fi
 	exec qemu-system-x86_64 -m $mem -smp $smp $gfx -serial stdio $kvm \
