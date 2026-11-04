@@ -1,0 +1,31 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Roman V Shaposhnik <rvs@apache.org>
+Date: Wed, 28 Oct 2026 16:26:38 +0000
+Subject: [PATCH 2/6] readn.c: retry reads interrupted by a signal
+
+A read failing with EINTR is not the end of the stream.
+
+Co-authored-by: Shelley <shelley@exe.dev>
+---
+ readn.c | 3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/readn.c b/readn.c
+index 89f0603..bd07219 100644
+--- a/readn.c
++++ b/readn.c
+@@ -1,4 +1,5 @@
+ #include <plan9.h>
++#include <errno.h>
+ 
+ long
+ readn(int f, void *av, long n)
+@@ -10,6 +11,8 @@ readn(int f, void *av, long n)
+ 	t = 0;
+ 	while(t < n){
+ 		m = read(f, a+t, n-t);
++		if(m < 0 && errno == EINTR)
++			continue;
+ 		if(m <= 0){
+ 			if(t == 0)
+ 				return m;

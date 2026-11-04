@@ -1,0 +1,260 @@
+#!/usr/bin/env python3
+# 9front-fs: serve /9front over 9P, hand its kernel to the host, or
+# drawterm to a cpuwait cpu server with /9front as the session's root.
+import hashlib, json, os, re, shlex, signal, socket, struct, subprocess, sys, time
+
+ROOT = "/9front"
+KERNEL = ROOT + "/amd64/9pc64"
+HEALTHCHECK = "/usr/local/bin/9p-healthcheck"
+SOCAT = ["socat", "TCP-LISTEN:564,reuseaddr,fork,max-children=64",
+	"EXEC:/usr/local/bin/u9fs -u root -a none -n -l /dev/stderr " + ROOT]
+SUMS = "/usr/local/share/doc/drawterm/SHA256SUMS"
+HELP = """usage: 9front [command]
+  serve               serve /9front over 9P2000 on tcp!*!564 (the default)
+  drawterm [options]  rcpu to a cpuwait cpu server, exporting /9front as root
+  kernel              write the amd64 kernel, 9pc64, to standard output
+  agents.md           how to boot that kernel with QEMU on the host
+  info --json         this image's metadata and settings
+serve:     READ_ONLY (1; 0: experimental writable export)
+agents.md: NINEFRONT_IMAGE (9front-fs), NINEFRONT_HOST_PORT (9564),
+           NINEFRONT_KERNEL_PATH (/tmp/kernel), NINEFRONT_QUIET (0; 1: no banner)
+drawterm:  CPU (found: host.docker.internal, then the default gateway),
+           PORT (17019), AUTH (tcp!127.0.0.1!567: none, so drawterm makes the
+           tickets and DTUSER must be the cpu server's host owner),
+           DTUSER (glenda), ROOT (/9front), WAIT (60 s; 0: don't),
+           PASS (else asked on the tty: -it), DRAWTERM (drawterm.linux-ARCH)
+"""
+
+
+class Error(Exception):
+	def __init__(self, msg, status=1):
+		super().__init__(msg)
+		self.status = status
+
+
+def env(name, default, pattern=None):
+	v = os.environ.get(name, default)
+	if pattern and not re.fullmatch(pattern, v):
+		raise Error(f"bad {name}: {v!r}", 64)
+	return v
+
+
+def settings():
+	path = env("NINEFRONT_KERNEL_PATH", "/tmp/kernel", r"/[^\x00-\x1f\x7f-\x9f]*")
+	port = int(env("NINEFRONT_HOST_PORT", "9564", r"[0-9]{1,5}"))
+	if not 1 <= port <= 65535:
+		raise Error("bad NINEFRONT_HOST_PORT", 64)
+	return {"image": env("NINEFRONT_IMAGE", "9front-fs", r"[^\s'\"]+"),
+		"read_only": env("READ_ONLY", "1", "[01]") == "1",
+		"kernel_path": path, "host_port": port, "host_address": "127.0.0.1",
+		"quiet": env("NINEFRONT_QUIET", "0", "[01]") == "1"}
+
+
+def kernel():
+	h, n = hashlib.sha256(), 0
+	with open(KERNEL, "rb") as f:
+		for b in iter(lambda: f.read(1 << 20), b""):
+			h.update(b)
+			n += len(b)
+	return {"path": KERNEL, "size": n, "sha256": h.hexdigest()}
+
+
+def info(s):
+	try:
+		drawterm = sorted(l.split()[1] for l in open(SUMS))
+	except OSError:
+		drawterm = []
+	return {"schema_version": 2, "image": s["image"], "architecture": "amd64",
+		"filesystem": {"root": ROOT, "protocol": "9P2000", "container_port": 564,
+			"read_only_default": True, "authentication": "none"},
+		"kernel": kernel(), "qemu_bundled": False, "drawterm": drawterm, "effective": s}
+
+
+def host_script(s, k):
+	q = shlex.quote
+	append = ("console=0 user=glenda sysname=diskless-amd64 fs=10.0.2.100 auth=127.0.0.1 "
+		"nobootprompt='tcp ether /net/ether0 10.0.2.15 255.255.255.0'")
+	qemu = ["qemu-system-x86_64", "-nodefaults", "-machine", "pc,accel=tcg", "-cpu", "qemu64",
+		"-m", "512M", "-smp", "2", "-kernel", "KERNEL", "-append", append,
+		"-netdev", "user,id=n0,guestfwd=tcp:10.0.2.100:564-cmd:socat STDIO "
+		f"TCP:{s['host_address']}:{s['host_port']}",
+		"-device", "virtio-net-pci,netdev=n0,disable-legacy=on",
+		"-display", "none", "-serial", "mon:stdio"]
+	return f"""#!/bin/sh
+set -eu
+for t in docker socat qemu-system-x86_64; do
+	command -v $t >/dev/null 2>&1 || {{ echo "missing host dependency: $t" >&2; exit 1; }}
+done
+if command -v sha256sum >/dev/null 2>&1; then sum=sha256sum; else sum='shasum -a 256'; fi
+kernel={q(s['kernel_path'])}
+[ ! -d "$kernel" ] || {{ echo "$kernel is a directory" >&2; exit 1; }}
+dir=${{kernel%/*}}
+stage=$(mktemp -d "${{dir:-/}}/.9front-kernel.XXXXXX")
+trap 'rm -rf "$stage"' 0
+trap 'exit 129' HUP; trap 'exit 130' INT; trap 'exit 143' TERM
+docker run --rm {q(s['image'])} kernel >"$stage/kernel"
+set -- $($sum <"$stage/kernel")
+[ "$1" = {k['sha256']} ] || {{ echo "kernel SHA-256 mismatch; $kernel unchanged" >&2; exit 1; }}
+mv -f "$stage/kernel" "$kernel"
+{' '.join('"$kernel"' if w == "KERNEL" else q(w) for w in qemu)}
+"""
+
+
+def agents(s, ready=False):
+	k = kernel()
+	mode = "read-only" if s["read_only"] else "EXPERIMENTAL WRITABLE (READ_ONLY=0)"
+	run = ["docker", "run", "-d", "--init", "--name", "ninefront-amd64", "--read-only",
+		"--cap-drop=ALL", "--cap-add=SYS_CHROOT", "--cap-add=DAC_OVERRIDE",
+		"--cap-add=NET_BIND_SERVICE", "--security-opt=no-new-privileges:true",
+		"-p", f"{s['host_address']}:{s['host_port']}:564",
+		"-e", f"NINEFRONT_HOST_PORT={s['host_port']}", s["image"]]
+	lines = ["# 9front amd64", "",
+		f"9P2000 ready: version/attach/stat healthcheck passed; {mode} export {ROOT}." if ready else
+		f"With no arguments, `{s['image']}` serves {ROOT} over 9P2000 on TCP 564, "
+		"read-only unless READ_ONLY=0, with no authentication.",
+		f"Kernel: {k['path']}, {k['size']} bytes, SHA-256 {k['sha256']}.",
+		f"The script assumes {s['host_address']}:{s['host_port']} on the host reaches "
+		"container port 564; publish it explicitly, on loopback only.",
+		"It needs docker, socat and qemu-system-x86_64 on the host (QEMU is not in the "
+		"image), replaces the kernel file only after checking its SHA-256, and "
+		"attaches no disks. Run it with the terminal as stdin; never use docker -t "
+		"with `kernel`."]
+	if not ready:
+		lines += ["", "Start the server first and wait for its readiness banner:", "",
+			"    " + shlex.join(run)]
+	lines += ["", "QEMU exits with Ctrl-a x. In the guest, `ramfs -m /tmp` gives "
+		"writable scratch. Afterwards, stop only the server you started."]
+	return "\n".join(lines) + "\n\n```sh\n" + host_script(s, k) + "```\n"
+
+
+def emit_kernel():
+	if sys.stdout.isatty():
+		raise Error("refusing to write the kernel to a terminal (no docker -t)")
+	with open(KERNEL, "rb") as f:
+		for b in iter(lambda: f.read(1 << 20), b""):
+			sys.stdout.buffer.write(b)
+	sys.stdout.buffer.flush()
+
+
+def serve(s):
+	if not os.path.isdir(ROOT):
+		raise Error(f"no {ROOT}")
+	server = subprocess.Popen(SOCAT, env=dict(os.environ, READ_ONLY="1" if s["read_only"] else "0"),
+		stdout=subprocess.DEVNULL, start_new_session=True)
+	stop = []
+	for sig in (signal.SIGTERM, signal.SIGINT):
+		signal.signal(sig, lambda n, _: stop.append(n))
+	try:
+		deadline = time.monotonic() + 20
+		while not stop:
+			if server.poll() is not None:
+				raise Error(f"9P server exited (status {server.returncode})")
+			try:
+				if subprocess.run([HEALTHCHECK], stdout=subprocess.DEVNULL,
+						stderr=subprocess.DEVNULL, timeout=5).returncode == 0:
+					break
+			except subprocess.TimeoutExpired:
+				pass
+			if time.monotonic() > deadline:
+				raise Error("9P server not ready after 20 s")
+			time.sleep(0.1)
+		if not stop and not s["quiet"]:
+			sys.stderr.write(agents(s, ready=True))
+			sys.stderr.flush()
+		while not stop:
+			if server.poll() is not None:
+				raise Error(f"9P server exited (status {server.returncode})")
+			time.sleep(0.1)
+		return 128 + stop[0]
+	finally:
+		for sig, grace in ((signal.SIGTERM, 1), (signal.SIGKILL, None)):
+			try:
+				os.killpg(server.pid, sig)
+				server.wait(grace)
+				break
+			except ProcessLookupError:
+				break
+			except subprocess.TimeoutExpired:
+				pass
+		server.wait()
+
+
+def gateway():
+	try:
+		for line in open("/proc/net/route").readlines()[1:]:
+			f = line.split()
+			if f[1] == "00000000":
+				return socket.inet_ntoa(struct.pack("<L", int(f[2], 16)))
+	except OSError:
+		pass
+
+
+def findcpu(cpu, port, wait):
+	# qemu's hostfwd accepts before the guest listens: wait for the cpu
+	# server's first bytes (its p9any offer), not just for a connection.
+	hosts = [cpu] if cpu else [h for h in ("host.docker.internal", gateway()) if h]
+	if wait <= 0:
+		return hosts[0]
+	end = time.monotonic() + wait
+	while time.monotonic() < end:
+		for h in hosts:
+			try:
+				with socket.create_connection((h, port), 1) as c:
+					c.settimeout(2)
+					if c.recv(1):
+						return h
+			except OSError:
+				pass
+		time.sleep(0.2)
+
+
+def drawterm(args):
+	arch = {"x86_64": "amd64", "aarch64": "arm64"}.get(os.uname().machine)
+	if arch is None:
+		raise Error(f"no drawterm for {os.uname().machine}")
+	dt = env("DRAWTERM", f"/usr/local/bin/drawterm.linux-{arch}")
+	cpu = env("CPU", "")
+	port = int(env("PORT", "17019", r"[0-9]{1,5}"))
+	wait = float(env("WAIT", "60", r"[0-9]+(\.[0-9]*)?"))
+	root = env("ROOT", ROOT)
+	if not os.access(dt, os.X_OK):
+		raise Error(f"no {dt}")
+	if not os.access(root + "/amd64/bin/rc", os.X_OK):
+		raise Error(f"{root} is not an amd64 9front tree: no amd64/bin/rc")
+	host = findcpu(cpu, port, wait)
+	if host is None:
+		raise Error(f"nothing answers on port {port} after {wait:g} s "
+			f"(tried: {cpu or 'host.docker.internal, the default gateway'}): is the "
+			"cpuwait VM running, with qemu's hostfwd on 0.0.0.0?")
+	# files the session makes are group-writable, as the tree's are
+	os.umask(0o002)
+	os.execv(dt, [dt, "-h", f"tcp!{host}!{port}", "-a", env("AUTH", "tcp!127.0.0.1!567"),
+		"-u", env("DTUSER", "glenda"), "-r", root, *args])
+
+
+def main(argv):
+	try:
+		cmd = argv[0] if argv else "serve"
+		if cmd == "drawterm":
+			drawterm(argv[1:])
+		elif argv in (["help"], ["--help"], ["-h"]):
+			sys.stdout.write(HELP)
+		elif argv in ([], ["serve"]):
+			return serve(settings())
+		elif argv == ["kernel"]:
+			emit_kernel()
+		elif argv in (["agents.md"], ["AGENTS.md"]):
+			sys.stdout.write(agents(settings()))
+		elif argv == ["info", "--json"]:
+			json.dump(info(settings()), sys.stdout, indent=2, sort_keys=True)
+			sys.stdout.write("\n")
+		else:
+			raise Error("unknown command; see 9front help", 64)
+		return 0
+	except (Error, OSError) as e:
+		print(f"9front: {e}", file=sys.stderr)
+		return getattr(e, "status", 1)
+
+
+if __name__ == "__main__":
+	sys.exit(main(sys.argv[1:]))

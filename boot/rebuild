@@ -2,45 +2,49 @@
 # Rebuild this checkout's userland, a kernel, or both, for any
 # objtype, on a cpuwait cpu server in qemu:
 #
-#	boot/rebuild [-a objtype] [-c conf] [-w] userland|kernel|all [file]
+#	boot/rebuild [-a objtype] [-c conf] [-w] [-t tag] userland|kernel|all [dir]
 #
-# A container of the objtype's image (boot/images; IMAGE overrides)
-# has its /9front updated to HEAD (-w: the working tree) by
-# boot/sync, then becomes the root of a drawterm session on an amd64
-# cpuwait kernel (boot/cpu), which runs, in place:
+# runs, in place, from /usr/glenda/bin/rc:
 #
 #	userland: build objtype (default amd64)
 #	kernel:   kernel conf (default the objtype's kernel below)
 #	all:      both
 #
-# from /usr/glenda/bin/rc.  The cross-compilers are amd64 programs,
-# so everything builds on the amd64 machine.  kernel links the
-# image's libraries: use all when they change.  mk release does not
-# fail when a directory's mk does, so the build fails on any mk error
-# in its output.
+# on a tree updated to HEAD (-w: the working tree) by boot/sync, as the
+# root of a drawterm session on an amd64 cpuwait kernel (boot/cpu):
+# the cross-compilers are amd64 programs, so everything builds on the
+# amd64 machine.  kernel links the tree's libraries: use all when they
+# change.  mk release does not fail when a directory's mk does, so the
+# build fails on any mk error in its output.
 #
-# userland and all write file (default ./9front.objtype.tar), a tar of
-# 9front/objtype and 9front/acme/bin/objtype with the Plan 9 owners
-# (amd64: all of 9front); kernel copies 9conf to file (default
-# ./9conf), and 9conf.u, s9conf or 9conf.gz, if the mkfile makes them,
-# beside it.  The output and the machine's console are in a temporary
-# directory, which is kept (and named) if the build fails.
+# It runs as docker buildx build of boot/Dockerfile, on the objtype's
+# image (boot/images; IMAGE overrides), and writes to dir (default .):
+# for userland, 9front.objtype.tar, a tar of 9front/objtype and
+# 9front/acme/bin/objtype with the Plan 9 owners (amd64: all of
+# 9front); for kernel, 9conf, and 9conf.u, s9conf or 9conf.gz if the
+# mkfile makes them; for all, both.  With -t, it makes the image tag instead.  qemu
+# uses KVM when the builder grants security.insecure (ACCEL=kvm), else
+# TCG (ACCEL=tcg), much slower.
 #
-# The machine's kernel is KERNEL, else the image's
-# /9front/amd64/9pc64cpuwait or /boot/9pc64cpuwait, else amd64's
-# image's /9front/amd64/9pc64cpuwait.
+# In a container that has the tree, qemu and drawterm, as the
+# Dockerfile's, -r root builds there, in the tree root, and writes to
+# dir, or with dir -, nowhere.  The machine's kernel is KERNEL, else the tree's
+# amd64/9pc64cpuwait, else /boot/9pc64cpuwait; its nvram
+# boot/docker/cpu.nvram.
 #
-# Environment: IMAGE, KERNEL (above), PASS (glen||glenda), MEM and
-# SMP (boot/cpu's), COMMIT (commit the built container as that image,
-# a seed for p9cloud's 9front-fs).
+# Environment: IMAGE, ACCEL, KERNEL (above), PASS (glen||glenda), MEM
+# and SMP (boot/cpu's).
 set -euo pipefail
 prog=boot/rebuild
-usage() { echo "usage: $prog [-a objtype] [-c conf] [-w] userland|kernel|all [file]" >&2; exit 2; }
-objtype=amd64 conf= work=
-while getopts 'a:c:w' opt; do
+usage() { echo "usage: $prog [-a objtype] [-c conf] [-w] [-t tag | -r root] userland|kernel|all [dir]" >&2; exit 2; }
+die() { echo "$prog: $*" >&2; exit 1; }
+objtype=amd64 conf= work= tag= root=
+while getopts 'a:c:r:t:w' opt; do
 	case $opt in
 	a) objtype=$OPTARG ;;
 	c) conf=$OPTARG ;;
+	r) root=$(realpath "$OPTARG") ;;
+	t) tag=$OPTARG ;;
 	w) work=-w ;;
 	*) usage ;;
 	esac
@@ -48,6 +52,8 @@ done
 shift $((OPTIND - 1))
 [ $# -ge 1 ] && [ $# -le 2 ] || usage
 what=$1
+out=${2:-.}
+[ "$out" = - ] || out=$(realpath -m "$out")
 # each objtype's kernel: a cpuwait server where qemu can boot one,
 # else a stock one; power's kernels do not build
 case $objtype in
@@ -71,66 +77,72 @@ all)      cmd="rc $rc/build $objtype && rc $rc/kernel $conf" ;;
 *) usage ;;
 esac
 [ "$what" = userland ] || [ -n "$conf" ] || { echo "$prog: no kernel for $objtype: -c or userland" >&2; exit 2; }
-if [ "$what" = kernel ]; then def=9$conf
-elif [ $objtype = amd64 ]; then paths=9front def=9front.amd64.tar
-else paths="9front/$objtype 9front/acme/bin/$objtype" def=9front.$objtype.tar
-fi
-out=$(realpath -m "${2:-$def}")
 boot=$(cd "$(dirname "$0")" && pwd)
-image=${IMAGE:-$(awk -v a="$objtype" '$1 == a { print $2 }' "$boot/images")}
-[ -n "$image" ] || { echo "$prog: no image for $objtype in boot/images" >&2; exit 1; }
-tmp=$(mktemp -d)
-ctr=rebuild-$what-$$
 
-die() { echo "$prog: $*" >&2; exit 1; }
+if [ -z "$root" ]; then
+	image=${IMAGE:-$(awk -v a="$objtype" '$1 == a { print $2 }' "$boot/images")}
+	[ -n "$image" ] || die "no image for $objtype in boot/images"
+	if [ -z "${ACCEL:-}" ]; then
+		ACCEL=tcg
+		case $(docker buildx inspect 2>/dev/null) in *security.insecure*) ACCEL=kvm ;; esac
+	fi
+	args=(--progress=plain -f "$boot/Dockerfile" --build-arg "SEED=$image" --build-arg "ACCEL=$ACCEL"
+		--build-arg "OBJTYPE=$objtype" --build-arg "CONF=$conf" --build-arg "WHAT=$what" --build-arg "WORK=$work")
+	[ "$ACCEL" = kvm ] && args+=(--allow security.insecure)
+	for v in MEM SMP; do [ -z "${!v:-}" ] || args+=(--build-arg "$v=${!v}"); done
+	if [ -n "$tag" ]; then
+		args+=(--target image --build-arg OUT=- -t "$tag" --load)
+	else
+		mkdir -p "$out"
+		args+=(--target out --output "type=local,dest=$out")
+	fi
+	exec docker buildx build "${args[@]}" "$boot/.."
+fi
+
+[ -z "$tag" ] || usage
+[ -x "$root/amd64/bin/rc" ] || die "$root: no amd64 9front tree"
+tmp=$(mktemp -d)
 cleanup() {
+	st=$?
 	[ -f "$tmp/pid" ] && kill "$(cat "$tmp/pid")" 2>/dev/null
-	docker rm -f "$ctr" >/dev/null 2>&1
-	# kept if the machine ran and the build failed
-	if [ -f "$tmp/ok" ] || [ ! -f "$tmp/console" ]; then rm -rf "$tmp"; else echo "$prog: see $tmp" >&2; fi
+	if [ $st -ne 0 ] && [ -f "$tmp/console" ]; then
+		echo "$prog: the machine's console:" >&2
+		tr -d '\r' <"$tmp/console" | tail -30 >&2
+	fi
+	rm -rf "$tmp"
 }
 trap cleanup EXIT
 trap 'exit 1' INT TERM HUP
 
-# as sys, so that what the build makes in /9front is sys's, like the
-# rest of the tree
-docker run -d --name "$ctr" --user 110000:110000 --entrypoint sleep "$image" infinity >/dev/null
-"$boot/sync" $work "$ctr" || die "sync failed"
+"$boot/sync" $work "$root" || die "sync failed"
+kernel=${KERNEL:-$root/amd64/9pc64cpuwait}
+[ -f "$kernel" ] || kernel=/boot/9pc64cpuwait
+[ -f "$kernel" ] || die "no 9pc64cpuwait for the machine: KERNEL"
+cp "$kernel" "$tmp/9pc64cpuwait"
+"$boot/cpu" -a amd64 -d "$tmp" "$tmp/9pc64cpuwait" || die "no cpu server"
 
-if [ -n "${KERNEL:-}" ]; then
-	cp "$KERNEL" "$tmp/9pc64cpuwait"
-elif ! docker cp -q "$ctr:/9front/amd64/9pc64cpuwait" "$tmp/" 2>/dev/null &&
-     ! docker cp -q "$ctr:/boot/9pc64cpuwait" "$tmp/" 2>/dev/null; then
-	a=$(awk '$1 == "amd64" { print $2 }' "$boot/images")
-	c=$(docker create "$a")
-	docker cp -q "$c:/9front/amd64/9pc64cpuwait" "$tmp/" || { docker rm "$c" >/dev/null; die "no 9pc64cpuwait: KERNEL"; }
-	docker rm "$c" >/dev/null
-fi
-docker cp -q "$ctr:/boot/cpu.nvram" "$tmp/" || die "no /boot/cpu.nvram in $image"
-"$boot/cpu" -a amd64 -d "$tmp" -n "$tmp/cpu.nvram" "$tmp/9pc64cpuwait" || die "no cpu server"
-
-docker exec -e "PORT=$(cat "$tmp/port")" -e "PASS=${PASS:-glen||glenda}" "$ctr" \
-	9front drawterm -G -c "$cmd" </dev/null 2>&1 | tee "$tmp/log" || die "$what build failed"
+# as sys, so that what the build makes in the tree is sys's, like
+# the rest of it
+"$boot/docker/assys" env CPU=127.0.0.1 "PORT=$(cat "$tmp/port")" "ROOT=$root" "PASS=${PASS:-glen||glenda}" \
+	python3 "$boot/docker/9front" drawterm -G -c "$cmd" </dev/null 2>&1 | tee "$tmp/log" || die "$what build failed"
 ! tr -d '\r' <"$tmp/log" | grep -E '^mk: .*(exit status|know how|no recipe)|^bad include|^(merge|cp) failed' >&2 ||
 	die "$what build failed"
 
-mkdir -p "$(dirname "$out")"
-if [ "$what" = kernel ]; then
+[ "$out" != - ] || exit 0
+mkdir -p "$out"
+if [ "$what" = kernel ] || [ "$what" = all ]; then
 	# 9conf, and 9conf.u, s9conf or 9conf.gz, in the kernel's /$objtype
-	docker exec -w /9front "$ctr" sh -c "ls -d */9$conf */9$conf.* */s9$conf 2>/dev/null" >"$tmp/k" || :
+	(cd "$root" && ls -d */9$conf */9$conf.* */s9$conf 2>/dev/null) >"$tmp/k" || :
 	grep -qx "[^/]*/9$conf" "$tmp/k" || die "no kernel 9$conf"
 	while read -r f; do
-		dest=$(dirname "$out")/${f#*/}
-		[ "${f#*/}" = "9$conf" ] && dest=$out
-		docker exec -w /9front "$ctr" cat "$f" >"$dest" || die "cannot copy $f"
-		sha256sum "$dest"
+		cp "$root/$f" "$out/" || die "cannot copy $f"
+		sha256sum "$out/${f#*/}"
 	done <"$tmp/k"
-else
-	docker exec -u 0 "$ctr" tar -C / -cf - $paths >"$out" || die "cannot copy $paths"
-	ls -l "$out"
 fi
-if [ -n "${COMMIT:-}" ]; then
-	docker commit "$ctr" "$COMMIT" >/dev/null || die "cannot commit $COMMIT"
-	echo "$prog: committed $COMMIT" >&2
+if [ "$what" != kernel ]; then
+	r=$(basename "$root")
+	paths=$r
+	[ $objtype = amd64 ] || paths="$r/$objtype $r/acme/bin/$objtype"
+	tar -C "$(dirname "$root")" -cf "$out/9front.$objtype.tar" $paths || die "cannot copy $paths"
+	ls -l "$out/9front.$objtype.tar"
 fi
-touch "$tmp/ok"

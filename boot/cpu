@@ -11,8 +11,8 @@
 #	                        (uImage) beside it
 #	riscv64  9rva23cpuwait  qemu-system-riscv64 -M virt, OpenSBI
 #
-# nvram holds the host owner's key (default the objtype's image's
-# /boot/cpu.nvram: glenda, authdom cpuwait, password glen||glenda).
+# nvram holds the host owner's key (default boot/docker/cpu.nvram:
+# glenda, authdom cpuwait, password glen||glenda).
 # The rcpu port, 17019, is forwarded from port (default a free one)
 # on all of this host's addresses, so that containers reach it.
 #
@@ -52,17 +52,10 @@ if [ -z "$objtype" ]; then
 fi
 [ -n "$port" ] || port=$(python3 -c 'import socket; s=socket.socket(); s.bind(("", 0)); print(s.getsockname()[1])')
 
+nvram=${nvram:-$boot/docker/cpu.nvram}
+[ -f "$nvram" ] || die "no nvram $nvram"
 own=$(mktemp -d)
 trap 'rm -rf "$own"' EXIT
-if [ -z "$nvram" ]; then
-	image=$(awk -v a="$objtype" '$1 == a { print $2 }' "$boot/images")
-	[ -n "$image" ] || die "no image for $objtype in boot/images: -n"
-	c=$(docker create "$image")
-	docker cp -q "$c:/boot/cpu.nvram" "$own/cpu.nvram" || { docker rm "$c" >/dev/null; die "no /boot/cpu.nvram in $image"; }
-	docker rm "$c" >/dev/null
-	nvram=$own/cpu.nvram
-	[ -z "$dir" ] || { cp "$nvram" "$dir/cpu.nvram"; nvram=$dir/cpu.nvram; }
-fi
 
 kvm=
 [ -w /dev/kvm ] && kvm=1

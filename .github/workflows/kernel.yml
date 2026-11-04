@@ -2,11 +2,12 @@
 # riscv64 userland of the pinned image (boot/images): 9rva23 (K1 and
 # K3), 9rva23cpuwait (K1/K3, cpuwait boot method) and 9maxion.
 # Boot-test 9rva23cpuwait with boot/test and 9maxion with its embedded
-# smoke test, both in qemu-system-riscv64.
+# smoke test, both in qemu-system-riscv64.  boot/rebuild and boot/test
+# run qemu in docker buildx builds of boot/Dockerfile, with KVM.
 #
 # The maxion configuration lives in sys/src/9/ainekko, which this branch
 # does not have yet: its build and boot test are commented out below
-# until it does.
+# until it does; its test needs qemu-system-misc and opensbi installed.
 name: Build and test RISC-V kernels
 
 on:
@@ -27,22 +28,22 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: KVM and qemu
-        run: |
-          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' |
-            sudo tee /etc/udev/rules.d/99-kvm4all.rules
-          sudo udevadm control --reload-rules
-          sudo udevadm trigger --name-match=kvm
-          sudo apt-get update -q
-          sudo apt-get install -qy --no-install-recommends qemu-system-x86 qemu-system-misc opensbi
-          test -w /dev/kvm
+      # qemu runs as root in the builder's container: /dev/kvm need
+      # only be there
+      - name: KVM
+        run: test -c /dev/kvm
+
+      # a builder whose RUNs may have /dev/kvm
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+        with:
+          buildkitd-flags: --allow-insecure-entitlement security.insecure
 
       # - name: Build 9rva23, 9rva23cpuwait and 9maxion
       - name: Build 9rva23 and 9rva23cpuwait
         run: |
           # for conf in rva23 rva23cpuwait maxion; do
           for conf in rva23 rva23cpuwait; do
-            boot/rebuild -a riscv64 -c $conf kernel out/9$conf
+            boot/rebuild -a riscv64 -c $conf kernel out
           done
           (cd out && sha256sum * >SHA256SUMS)
 
@@ -74,15 +75,11 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-      # boot/rebuild and boot/test keep their machine's console when they fail
-      - name: Upload consoles
-        if: failure()
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: riscv64-consoles-${{ github.sha }}
-          path: |
-            /tmp/tmp.*/console
-            /tmp/tmp.*/log
-            maxion.console
-          if-no-files-found: ignore
-          retention-days: 14
+      #- name: Upload maxion's console
+      #  if: failure()
+      #  uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      #  with:
+      #    name: maxion-console-${{ github.sha }}
+      #    path: maxion.console
+      #    if-no-files-found: ignore
+      #    retention-days: 14

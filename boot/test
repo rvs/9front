@@ -1,13 +1,13 @@
 #!/bin/bash
 # Boot a cpuwait kernel in qemu and test it over drawterm:
 #
-#	boot/test [-a objtype] [-w] kernel [tar]
+#	boot/test [-a objtype] [-w] [-r root] kernel [tar]
 #
 # kernel is a cpuwait kernel boot/cpu boots (objtype by default from
-# its name).  The session's root is a container of the objtype's
-# image (boot/images; IMAGE overrides), updated by boot/sync to HEAD
-# (-w: the working tree), with tar (a userland boot/rebuild wrote)
-# unpacked in it.  The tests, each its own drawterm session:
+# its name).  The session's root is the objtype's image's tree
+# (boot/images; IMAGE overrides), updated by boot/sync to HEAD (-w: the
+# working tree), with tar (a userland boot/rebuild wrote) unpacked in
+# it.  The tests, each its own drawterm session:
 #
 #	login:   glenda, with PASS, gets objtype's shell
 #	native:  ls and rc, built there with objtype's compiler from the
@@ -16,17 +16,22 @@
 #	status:  a failing command fails drawterm
 #	pass:    another password is refused
 #
-# The machine's console is in a temporary directory, kept (and
-# named) if a test fails.
+# It runs as docker buildx build of boot/Dockerfile, as boot/rebuild
+# does (ACCEL), the kernel and tar sent as the context kernel.  In a
+# container that has the tree, qemu and drawterm, -r root tests there,
+# in the tree root.
 #
-# Environment: IMAGE, PASS (glen||glenda), MEM and SMP (boot/cpu's).
+# Environment: IMAGE, ACCEL, PASS (glen||glenda), MEM and SMP
+# (boot/cpu's).
 set -euo pipefail
 prog=boot/test
-usage() { echo "usage: $prog [-a objtype] [-w] kernel [tar]" >&2; exit 2; }
-objtype= work=
-while getopts 'a:w' opt; do
+usage() { echo "usage: $prog [-a objtype] [-w] [-r root] kernel [tar]" >&2; exit 2; }
+die() { echo "$prog: $*" >&2; exit 1; }
+objtype= work= root=
+while getopts 'a:r:w' opt; do
 	case $opt in
 	a) objtype=$OPTARG ;;
+	r) root=$(realpath "$OPTARG") ;;
 	w) work=-w ;;
 	*) usage ;;
 	esac
@@ -34,41 +39,65 @@ done
 shift $((OPTIND - 1))
 [ $# -ge 1 ] && [ $# -le 2 ] || usage
 kernel=$(realpath "$1") tar=${2:+$(realpath "$2")}
-[ -f "$kernel" ] || usage
-[ -z "$tar" ] || [ -f "$tar" ] || { echo "$prog: no tar $tar" >&2; exit 1; }
+[ -f "$kernel" ] || die "no kernel $1"
+[ -z "$tar" ] || [ -f "$tar" ] || die "no tar $tar"
 if [ -z "$objtype" ]; then
 	case $(basename "$kernel") in
 	9pc64*) objtype=amd64 ;;
 	9pc*)   objtype=386 ;;
 	9qemu*) objtype=arm64 ;;
 	9rva23*|9rv64*) objtype=riscv64 ;;
-	*) echo "$prog: $kernel: which objtype? -a" >&2; usage ;;
+	*) die "$kernel: which objtype? -a" ;;
 	esac
 fi
 boot=$(cd "$(dirname "$0")" && pwd)
-image=${IMAGE:-$(awk -v a="$objtype" '$1 == a { print $2 }' "$boot/images")}
-[ -n "$image" ] || { echo "$prog: no image for $objtype in boot/images" >&2; exit 1; }
 pass=${PASS:-glen||glenda}
 tmp=$(mktemp -d)
-ctr=boot-test-$$
 
-die() { echo "$prog: $*" >&2; exit 1; }
+if [ -z "$root" ]; then
+	trap 'rm -rf "$tmp"' EXIT
+	image=${IMAGE:-$(awk -v a="$objtype" '$1 == a { print $2 }' "$boot/images")}
+	[ -n "$image" ] || die "no image for $objtype in boot/images"
+	if [ -z "${ACCEL:-}" ]; then
+		ACCEL=tcg
+		case $(docker buildx inspect 2>/dev/null) in *security.insecure*) ACCEL=kvm ;; esac
+	fi
+	# the context: the kernel, its uImage, and tar
+	mkdir "$tmp/kernel"
+	for f in "$kernel" "$kernel.u" $tar; do
+		[ -f "$f" ] && { ln "$f" "$tmp/kernel/" 2>/dev/null || cp "$f" "$tmp/kernel/"; }
+	done
+	args=(--progress=plain -f "$boot/Dockerfile" --build-arg "SEED=$image" --build-arg "ACCEL=$ACCEL"
+		--build-arg "OBJTYPE=$objtype" --build-arg "WORK=$work"
+		--build-arg "KERNEL=$(basename "$kernel")" --build-arg "TAR=${tar:+$(basename "$tar")}"
+		--build-context "kernel=$tmp/kernel" --target test --no-cache-filter "test-$ACCEL"
+		--output type=cacheonly)
+	[ "$ACCEL" = kvm ] && args+=(--allow security.insecure)
+	for v in MEM SMP; do [ -z "${!v:-}" ] || args+=(--build-arg "$v=${!v}"); done
+	docker buildx build "${args[@]}" "$boot/.."
+	exit
+fi
+
+[ -x "$root/amd64/bin/rc" ] || die "$root: no amd64 9front tree"
 cleanup() {
+	st=$?
 	[ -f "$tmp/pid" ] && kill "$(cat "$tmp/pid")" 2>/dev/null
-	docker rm -f "$ctr" >/dev/null 2>&1
-	if [ -f "$tmp/ok" ] || [ ! -f "$tmp/console" ]; then rm -rf "$tmp"; else echo "$prog: see $tmp" >&2; fi
+	if [ $st -ne 0 ] && [ -f "$tmp/console" ]; then
+		echo "$prog: the machine's console:" >&2
+		tr -d '\r' <"$tmp/console" | tail -30 >&2
+	fi
+	rm -rf "$tmp"
 }
 trap cleanup EXIT
 trap 'exit 1' INT TERM HUP
 
-docker run -d --name "$ctr" --user 110000:110000 --entrypoint sleep "$image" infinity >/dev/null
-"$boot/sync" $work "$ctr" || die "sync failed"
+"$boot/sync" $work "$root" || die "sync failed"
 if [ -n "$tar" ]; then
-	docker exec -i -u 0 "$ctr" tar -C / -xpf - <"$tar" || die "cannot unpack $tar"
+	tar -C "$(dirname "$root")" -xpf "$tar" || die "cannot unpack $tar"
 fi
-docker exec "$ctr" test -x /9front/$objtype/bin/rc || die "no /$objtype/bin/rc in the tree: tar"
+[ -x "$root/$objtype/bin/rc" ] || die "no /$objtype/bin/rc in the tree: tar"
 # not in /tmp: drawterm covers the root's /tmp with its own
-docker exec -i "$ctr" sh -c 'cat >/9front/sys/lib/boot-test.rc' <<'EOF'
+"$boot/docker/assys" sh -c "cat >'$root/sys/lib/boot-test.rc'" <<'EOF'
 rfork e
 fn fail { echo boot-test: FAIL $* >[1=2]; exit fail }
 u=`{cat /dev/user}
@@ -88,11 +117,13 @@ mk clean >/dev/null
 echo boot-test: ok native ls rc
 EOF
 
-docker cp -q "$ctr:/boot/cpu.nvram" "$tmp/" || die "no /boot/cpu.nvram in $image"
-"$boot/cpu" -a "$objtype" -d "$tmp" -n "$tmp/cpu.nvram" "$kernel" || die "no cpu server"
+"$boot/cpu" -a "$objtype" -d "$tmp" "$kernel" || die "no cpu server"
 port=$(cat "$tmp/port")
 
-dt() { docker exec -e "PORT=$port" -e "PASS=$1" "$ctr" 9front drawterm -G -c "$2" </dev/null 2>&1 | tr -d '\r'; }
+dt() {
+	"$boot/docker/assys" env CPU=127.0.0.1 "PORT=$port" "ROOT=$root" "PASS=$1" \
+		python3 "$boot/docker/9front" drawterm -G -c "$2" </dev/null 2>&1 | tr -d '\r'
+}
 dt "$pass" "rc /sys/lib/boot-test.rc $objtype" | tee "$tmp/log" || die "login or native failed"
 grep -q '^boot-test: ok native' "$tmp/log" || die "login or native failed"
 if dt "$pass" 'echo boot-test: in; exit fail' >"$tmp/log"; then die "status: a failing command succeeded"; fi
@@ -102,4 +133,3 @@ echo "boot-test: ok status"
 if dt "not-$pass" 'echo in' >"$tmp/log"; then die "pass: another password got in"; fi
 grep -q 'cannot read authenticator' "$tmp/log" || { cat "$tmp/log" >&2; die "pass: not refused"; }
 echo "boot-test: ok pass"
-touch "$tmp/ok"
