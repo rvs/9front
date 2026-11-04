@@ -4,11 +4,11 @@
 # s9conf or 9conf.gz, as the directory's mkfile makes them).  conf is
 # a configuration of one kernel directory (pc64/pc64, arm64/qemu,
 # bcm/pi2, ...), whose mkfile sets objtype.  NAMEcpuwait is NAME with
-# the cpuwait boot file system: the name alone makes mk use
-# NAMEcpuwait.bootfs.proto (see /sys/src/9/boot/bootmkfile), which is
-# /boot/cpuwait/pc64cpuwait.bootfs.proto unless the directory has its
-# own.  The kernel links /$objtype/lib's libraries, and its boot file
-# system holds /$objtype/bin's programs: build $objtype first.
+# the cpuwait boot method: the name alone makes mk add
+# /sys/src/9/boot/cpuwait.proto to the boot file system (see
+# /sys/src/9/boot/bootmkfile).  The kernel links /$objtype/lib's
+# libraries, and its boot file system holds /$objtype/bin's
+# programs: build $objtype first.
 # -c cleans the kernel directory after the install.
 rfork e
 clean=()
@@ -31,10 +31,9 @@ if(! test -f /$objtype/lib/libc.a){
 	echo kernel: no /$objtype/lib/libc.a: build $objtype first >[1=2]
 	exit userland
 }
-if(! ~ $conf $base){
+# the mkfile reads the configuration by its name
+if(! ~ $conf $base)
 	cp $base $conf
-	test -f $conf.bootfs.proto || cp /boot/cpuwait/pc64cpuwait.bootfs.proto $conf.bootfs.proto
-}
 mk 'CONF='^$conf install || exit
 if(~ $#clean 0)
 	exit
