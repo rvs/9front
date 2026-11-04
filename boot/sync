@@ -1,0 +1,203 @@
+#!/usr/bin/env python3
+"""usage: boot/sync [-w] [-x path]... container
+
+Update the /9front of a running container of a 9front-fs image to
+this checkout's HEAD, from the tree's commit (its
+dist/9front/.git/refs/heads/front), which must be in this repository,
+as 9front's git/pull and git/branch would, but with the host's git,
+in seconds.  With -w, the files are the working tree's (tracked and
+untracked but not ignored), and the tree's repository still moves
+to HEAD, so 9front's git/diff shows the difference.
+
+- only the files that differ are written, with git's modes as 664 or
+  775 and the time now; new files and directories belong to sys,
+  changed files keep their owners;
+- files edited in the tree get a three-way merge (git merge-file);
+  a conflict, or a file edited in the tree but removed here, fails;
+  files changed here but absent from the tree stay absent;
+- removed files are removed;
+- the tree's repository moves to HEAD: a pack of the new objects,
+  refs/heads/front, and INDEX9 lines, as git/branch writes them;
+- /sys/lib/rootstub makes the directories every objtype installs into.
+
+The top-level paths boot, .github and AGENTS.md, this host's, and
+any named with -x are left out of the tree, but not of its repository.
+"""
+import getopt, hashlib, io, os, subprocess, sys, tarfile, tempfile, time
+
+SYS = 110000
+EXCLUDE = ['boot', '.github', 'AGENTS.md']
+
+# Run in the container: a tar of the listed paths under /9front that
+# exist, without descending into directories.
+QUERY = r'''
+import os, sys, tarfile
+t = tarfile.open(fileobj=sys.stdout.buffer, mode='w|', format=tarfile.PAX_FORMAT)
+for p in sys.stdin.buffer.read().split(b'\0'):
+    p = os.fsdecode(p)
+    if p and os.path.lexists('/9front/' + p):
+        t.add('/9front/' + p, arcname='9front/' + p, recursive=False)
+t.close()
+'''
+
+
+def die(msg):
+    sys.exit('boot/sync: ' + msg)
+
+
+def run(*cmd, input=None, check=True):
+    r = subprocess.run(cmd, input=input, stdout=subprocess.PIPE)
+    if check and r.returncode:
+        die(f'{cmd[0]} {cmd[1]} failed')
+    return r
+
+
+def diff(git, a, b):
+    # :OLDMODE NEWMODE OLDID NEWID STATUS\0PATH\0, for files only
+    raw = git('diff', '--raw', '-z', '--no-renames', '--no-abbrev', a, b).split(b'\0')
+    changes = []
+    for meta, p in zip(raw[0::2], raw[1::2]):
+        om, nm, oid, nid, st = meta.decode()[1:].split()
+        changes.append((os.fsdecode(p), om, nm, oid, nid, st))
+    return changes
+
+
+def worktree(git, src):
+    # the working tree as a tree object, staged in a copy of the index
+    with tempfile.TemporaryDirectory() as td:
+        index = git('rev-parse', '--path-format=absolute', '--git-path', 'index').decode().strip()
+        env = dict(os.environ, GIT_INDEX_FILE=f'{td}/index')
+        if os.path.exists(index):
+            open(f'{td}/index', 'wb').write(open(index, 'rb').read())
+        for cmd in ['add', '-A'], ['write-tree']:
+            r = subprocess.run(['git', '-C', src, *cmd], env=env, stdout=subprocess.PIPE)
+            if r.returncode:
+                die(f'git {cmd[0]} failed')
+    return r.stdout.decode().strip()
+
+
+def main(ctr, work, exclude):
+    src = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
+    git = lambda *a, **k: run('git', '-C', src, *a, **k).stdout
+    exec_ = lambda *a, **k: run('docker', 'exec', '-i', '-u', '0', '-w', '/9front', ctr, *a, **k).stdout
+    fmt = git('rev-parse', '--show-object-format').decode().strip()
+    blobid = lambda d: hashlib.new(fmt, b'blob %d\0' % len(d) + d).hexdigest()
+
+    seed = exec_('cat', 'dist/9front/.git/refs/heads/front').decode().strip()
+    want = git('rev-parse', 'HEAD').decode().strip()
+    if run('git', '-C', src, 'cat-file', '-e', seed + '^{commit}', check=False).returncode:
+        die(f'the tree\'s commit {seed} is not in this repository: git fetch origin {seed}')
+    files = worktree(git, src) if work else want
+    changes = diff(git, seed, want)
+    left = lambda p: p.split('/')[0] in exclude
+    tree = [c for c in diff(git, seed, files) if not left(c[0])]
+    if not tree and not changes:
+        print('boot/sync: nothing to update', file=sys.stderr)
+        return
+    what = want[:9] + (' and the working tree' if work else '')
+
+    # what the tree has of the changed files, their directories, and
+    # the repository's front and INDEX9
+    dirs = {os.path.dirname(c[0]) for c in tree}
+    dirs = {d for p in dirs for d in [p] + [p.rsplit('/', i)[0] for i in range(1, p.count('/') + 1)] if d}
+    ask = [c[0] for c in tree] + sorted(dirs) + ['dist/9front/.git/refs/heads/front', 'dist/9front/.git/INDEX9']
+    have = {}
+    with tarfile.open(fileobj=io.BytesIO(exec_('python3', '-c', QUERY, input=b'\0'.join(map(os.fsencode, ask)))), mode='r|') as t:
+        for i in t:
+            have[i.name[len('9front/'):]] = (i, t.extractfile(i).read() if i.isfile() else None)
+
+    def blob(oid):
+        return git('cat-file', 'blob', oid)
+
+    out = io.BytesIO()
+    tar = tarfile.open(fileobj=out, mode='w', format=tarfile.PAX_FORMAT)
+    now = time.time()
+
+    def add(p, data=None, mode=0o664, kind=tarfile.REGTYPE, link=''):
+        i = tarfile.TarInfo('9front/' + p)
+        i.mode, i.mtime, i.type, i.linkname, i.uid, i.gid = mode, now, kind, link, SYS, SYS
+        i.size = len(data) if data is not None else 0
+        tar.addfile(i, io.BytesIO(data) if data is not None else None)
+
+    for d in sorted(d for d in dirs if d not in have or not have[d][0].isdir()):
+        add(d, mode=0o775, kind=tarfile.DIRTYPE)
+    remove, chown, merged, absent, conflicts = [], {}, [], [], []
+    for p, om, nm, oid, nid, st in tree:
+        h = have.get(p)
+        cur = h[1] if h else None
+        edited = h and om.startswith('100') and (cur is None or blobid(cur) != oid)
+        if st == 'D':
+            if edited:
+                conflicts.append(p + ': edited in the tree, removed in ' + what)
+            elif h:
+                remove.append(p)
+            continue
+        if st == 'M' and not h:
+            absent.append(p)
+            continue
+        if h and (st == 'T' or not h[0].isfile()):
+            remove.append(p)
+            h = None
+        if nm.startswith('160'):                # a submodule: nothing to write
+            continue
+        data = blob(nid)
+        if edited and st == 'M' and blobid(cur) != nid:
+            with tempfile.TemporaryDirectory() as td:
+                for n, d in ('tree', cur), ('seed', blob(oid)), ('new', data):
+                    open(f'{td}/{n}', 'wb').write(d)
+                r = run('git', 'merge-file', '-p', '-L', 'tree', '-L', seed[:9], '-L', what,
+                        f'{td}/tree', f'{td}/seed', f'{td}/new', check=False)
+            if r.returncode:
+                conflicts.append(p + ': merge conflict')
+                continue
+            data = r.stdout
+            merged.append(p)
+        if nm == '120000':
+            add(p, kind=tarfile.SYMTYPE, link=os.fsdecode(data))
+        else:
+            add(p, data, 0o775 if nm == '100755' else 0o664)
+        if h and (h[0].uid, h[0].gid) != (SYS, SYS):
+            chown.setdefault(f'{h[0].uid}:{h[0].gid}', []).append(p)
+    if conflicts:
+        die('cannot update:\n\t' + '\n\t'.join(conflicts))
+
+    # the repository: the objects, front, and git/branch's INDEX9 lines
+    if changes:
+        with tempfile.TemporaryDirectory() as td:
+            objs = git('rev-list', '--objects', f'{seed}..{want}')
+            name = run('git', '-C', src, 'pack-objects', '-q', f'{td}/p', input=objs).stdout.decode().strip()
+            for ext in 'pack', 'idx':
+                add(f'dist/9front/.git/objects/pack/{name}.{ext}', open(f'{td}/p-{name}.{ext}', 'rb').read())
+        index = have['dist/9front/.git/INDEX9'][1] + b''.join(
+            b'%s NOQID 0 %s\n' % (b'R' if c[5] == 'D' else b'T', os.fsencode(c[0])) for c in changes)
+        for p, d in ('refs/heads/front', want.encode() + b'\n'), ('INDEX9', index):
+            add('dist/9front/.git/' + p, d)
+            i = have['dist/9front/.git/' + p][0]
+            chown.setdefault(f'{i.uid}:{i.gid}', []).append('dist/9front/.git/' + p)
+    tar.close()
+
+    if remove:
+        exec_('xargs', '-0', 'rm', '-rf', '--', input=b'\0'.join(map(os.fsencode, remove)))
+    run('docker', 'cp', '-a', '-', f'{ctr}:/', input=out.getvalue())
+    for owner, ps in chown.items():
+        exec_('xargs', '-0', 'chown', owner, '--', input=b'\0'.join(map(os.fsencode, ps)))
+    # the directories every objtype's builds install into, as sys
+    run('docker', 'exec', '-w', '/9front', ctr, 'sh', '-c', 'umask 002; . sys/lib/rootstub')
+
+    n = lambda s: sum(1 for c in tree if c[5] == s)
+    print(f'boot/sync: {seed[:9]}..{what}: {n("A")} added, {n("M") + n("T")} changed, '
+          f'{n("D")} removed, {len(merged)} merged', file=sys.stderr)
+    for p in merged:
+        print('boot/sync: merged:', p, file=sys.stderr)
+    for p in absent:
+        print('boot/sync: not in the tree, left out:', p, file=sys.stderr)
+
+
+if __name__ == '__main__':
+    try:
+        opts, args = getopt.getopt(sys.argv[1:], 'wx:')
+    except getopt.GetoptError:
+        args = []
+    if len(args) != 1:
+        sys.exit(__doc__.split('\n\n')[0])
+    main(args[0], ('-w', '') in opts, EXCLUDE + [v for o, v in opts if o == '-x'])

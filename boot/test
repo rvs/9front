@@ -1,89 +1,105 @@
-#!/usr/bin/env bash
-
-set -e
-cd $(dirname $0)/..
-
-prog=$(basename $0)
-task=${1:-}
-shift || true
-
-case $task in
-build)
-	qemu=(-386 -smp 1)
-	guest='rc /usr/glenda/bin/rc/buildall'
-	mark=BUILD
-	timeout=5400
-	;;
-smoke)
-	case ${1:-} in
-	-386|-amd64)	qemu=($1) ;;
-	*)		echo "usage: $prog smoke [-386 | -amd64]" >&2; exit 1 ;;
+#!/bin/bash
+# Boot a cpuwait kernel in qemu and test it over drawterm:
+#
+#	boot/test [-a objtype] [-w] kernel [tar]
+#
+# kernel is a cpuwait kernel boot/cpu boots (objtype by default from
+# its name).  The session's root is a container of the objtype's
+# image (boot/images; IMAGE overrides), updated by boot/sync to HEAD
+# (-w: the working tree), with tar (a userland boot/rebuild wrote)
+# unpacked in it.  The tests, each its own drawterm session:
+#
+#	login:   glenda, with PASS, gets objtype's shell
+#	native:  ls and rc, built there with objtype's compiler from the
+#	         tree's sources, are identical to /objtype/bin's (so the
+#	         userland must be built from the same sources: tar)
+#	status:  a failing command fails drawterm
+#	pass:    another password is refused
+#
+# The machine's console is in a temporary directory, kept (and
+# named) if a test fails.
+#
+# Environment: IMAGE, PASS (glen||glenda), MEM and SMP (boot/cpu's).
+set -euo pipefail
+prog=boot/test
+usage() { echo "usage: $prog [-a objtype] [-w] kernel [tar]" >&2; exit 2; }
+objtype= work=
+while getopts 'a:w' opt; do
+	case $opt in
+	a) objtype=$OPTARG ;;
+	w) work=-w ;;
+	*) usage ;;
 	esac
-	guest='rc /usr/glenda/bin/rc/smoke'
-	mark=SMOKE
-	timeout=600
-	;;
-*)
-	echo "usage: $prog build | smoke [-386 | -amd64]" >&2
-	exit 1
-	;;
-esac
+done
+shift $((OPTIND - 1))
+[ $# -ge 1 ] && [ $# -le 2 ] || usage
+kernel=$(realpath "$1") tar=${2:+$(realpath "$2")}
+[ -f "$kernel" ] || usage
+[ -z "$tar" ] || [ -f "$tar" ] || { echo "$prog: no tar $tar" >&2; exit 1; }
+if [ -z "$objtype" ]; then
+	case $(basename "$kernel") in
+	9pc64*) objtype=amd64 ;;
+	9pc*)   objtype=386 ;;
+	9qemu*) objtype=arm64 ;;
+	9rva23*|9rv64*) objtype=riscv64 ;;
+	*) echo "$prog: $kernel: which objtype? -a" >&2; usage ;;
+	esac
+fi
+boot=$(cd "$(dirname "$0")" && pwd)
+image=${IMAGE:-$(awk -v a="$objtype" '$1 == a { print $2 }' "$boot/images")}
+[ -n "$image" ] || { echo "$prog: no image for $objtype in boot/images" >&2; exit 1; }
+pass=${PASS:-glen||glenda}
+tmp=$(mktemp -d)
+ctr=boot-test-$$
 
-mac=52:54:00:12:34:56
-serial=${SERIAL:-/tmp/9legacy-$task-$$.log}
-: >$serial
-
+die() { echo "$prog: $*" >&2; exit 1; }
 cleanup() {
-	rc=$?
-	pkill -f "qemu-system-x86_64.*mac=$mac" 2>/dev/null || true
-	if [ $rc -ne 0 ]; then
-		echo "$prog: $task failed, serial log $serial" >&2
-		tail -40 $serial >&2
-	fi
+	[ -f "$tmp/pid" ] && kill "$(cat "$tmp/pid")" 2>/dev/null
+	docker rm -f "$ctr" >/dev/null 2>&1
+	if [ -f "$tmp/ok" ] || [ ! -f "$tmp/console" ]; then rm -rf "$tmp"; else echo "$prog: see $tmp" >&2; fi
 }
-trap cleanup EXIT INT TERM
+trap cleanup EXIT
+trap 'exit 1' INT TERM HUP
 
-SERIAL=$serial MARK=$mark GUEST=$guest TIMEOUT=$timeout \
-expect -f - ./boot/qemu "${qemu[@]}" <<'EXPECT'
-log_file -a $env(SERIAL)
-set mark $env(MARK)
-set guest $env(GUEST)
-set timeout $env(TIMEOUT)
-spawn -noecho {*}$argv
-set send_slow {1 0.02}
-proc bail {code} { catch {exec kill [exp_pid]}; exit $code }
-proc die {msg} { puts stderr "\nboot/test: $msg"; bail 1 }
-proc atprompt {} {
-	expect {
-		-re {% $} {}
-		timeout { die "no shell prompt" }
-		eof { die "qemu exited" }
-	}
-}
-proc waitready {} {
-	global timeout
-	set save $timeout
-	set timeout 2
-	for {set i 0} {$i < 60} {incr i} {
-		send "\r"
-		expect {
-			-re {% $} { set timeout $save; return }
-			timeout {}
-			eof { die "qemu exited" }
-		}
-	}
-	die "console rc never became ready"
-}
-atprompt
-waitready
-send -s -- "$guest && echo $mark^-OK || echo $mark^-FAIL"
-send "\r"
-expect {
-	"$mark-OK" {}
-	"$mark-FAIL" { die "$guest failed" }
-	timeout { die "$guest timed out" }
-	eof { die "qemu exited" }
-}
-atprompt
-bail 0
-EXPECT
+docker run -d --name "$ctr" --user 110000:110000 --entrypoint sleep "$image" infinity >/dev/null
+"$boot/sync" $work "$ctr" || die "sync failed"
+if [ -n "$tar" ]; then
+	docker exec -i -u 0 "$ctr" tar -C / -xpf - <"$tar" || die "cannot unpack $tar"
+fi
+docker exec "$ctr" test -x /9front/$objtype/bin/rc || die "no /$objtype/bin/rc in the tree: tar"
+# not in /tmp: drawterm covers the root's /tmp with its own
+docker exec -i "$ctr" sh -c 'cat >/9front/sys/lib/boot-test.rc' <<'EOF'
+rfork e
+fn fail { echo boot-test: FAIL $* >[1=2]; exit fail }
+u=`{cat /dev/user}
+~ $cputype $1 || fail cputype $cputype, not $1
+~ $u glenda || fail user $u
+echo boot-test: ok login $u $cputype `{cat /dev/sysname}
+objtype=$cputype
+O=`{sed -n 's/^O=//p' /$objtype/mkfile}
+cd /sys/src/cmd
+mk $O.ls >/dev/null || fail native: mk $O.ls
+cmp $O.ls /$objtype/bin/ls || fail native: ls differs
+rm -f $O.ls ls.$O
+cd rc
+mk $O.out >/dev/null || fail native: mk rc
+cmp $O.out /$objtype/bin/rc || fail native: rc differs
+mk clean >/dev/null
+echo boot-test: ok native ls rc
+EOF
+
+docker cp -q "$ctr:/boot/cpu.nvram" "$tmp/" || die "no /boot/cpu.nvram in $image"
+"$boot/cpu" -a "$objtype" -d "$tmp" -n "$tmp/cpu.nvram" "$kernel" || die "no cpu server"
+port=$(cat "$tmp/port")
+
+dt() { docker exec -e "PORT=$port" -e "PASS=$1" "$ctr" 9front drawterm -G -c "$2" </dev/null 2>&1 | tr -d '\r'; }
+dt "$pass" "rc /sys/lib/boot-test.rc $objtype" | tee "$tmp/log" || die "login or native failed"
+grep -q '^boot-test: ok native' "$tmp/log" || die "login or native failed"
+if dt "$pass" 'echo boot-test: in; exit fail' >"$tmp/log"; then die "status: a failing command succeeded"; fi
+# failed for the command, not for want of a session
+grep -q '^boot-test: in' "$tmp/log" || { cat "$tmp/log" >&2; die "status: no session"; }
+echo "boot-test: ok status"
+if dt "not-$pass" 'echo in' >"$tmp/log"; then die "pass: another password got in"; fi
+grep -q 'cannot read authenticator' "$tmp/log" || { cat "$tmp/log" >&2; die "pass: not refused"; }
+echo "boot-test: ok pass"
+touch "$tmp/ok"

@@ -1,8 +1,8 @@
-# Build the riscv64 kernels from this commit's sys/src/9 with p9cloud's
-# rebuild.sh, on the riscv64 userland of ghcr.io/rvs/9front-riscv64:
-# 9rva23 (K1 and K3), 9rva23cpuwait (K1/K3, cpuwait boot file system)
-# and 9maxion.  Boot-test 9rva23cpuwait with p9cloud's boot-test.sh and
-# 9maxion's embedded smoke test, both in qemu-system-riscv64.
+# Build the riscv64 kernels of this commit with boot/rebuild, on the
+# riscv64 userland of the pinned image (boot/images): 9rva23 (K1 and
+# K3), 9rva23cpuwait (K1/K3, cpuwait boot method) and 9maxion.
+# Boot-test 9rva23cpuwait with boot/test and 9maxion with its embedded
+# smoke test, both in qemu-system-riscv64.
 #
 # The maxion configuration lives in sys/src/9/ainekko, which this branch
 # does not have yet: its build and boot test are commented out below
@@ -19,19 +19,12 @@ jobs:
   kernel:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
-    env:
-      FS: p9cloud/src/docker/fs
-      IMAGE: 9front-riscv64-ci
     steps:
+      # all of its history: boot/sync updates the image's tree from its
+      # commit
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
-          path: 9front
-          persist-credentials: false
-
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
-        with:
-          repository: rvs/p9cloud
-          path: p9cloud
+          fetch-depth: 0
           persist-credentials: false
 
       - name: KVM and qemu
@@ -44,31 +37,17 @@ jobs:
           sudo apt-get install -qy --no-install-recommends qemu-system-x86 qemu-system-misc opensbi
           test -w /dev/kvm
 
-      # the published riscv64 tree, with this commit's kernel sources
-      # over its own, owned by sys like the rest of the tree.  rva23
-      # (riscv64 before its rename) and ainekko are wholly this
-      # repository's: drop the image's copies first, or files moved or
-      # deleted here (and stale objects) would survive the COPY
-      - name: Image
-        run: |
-          docker build -t "$IMAGE" -f - 9front/sys/src/9 <<'END'
-          FROM ghcr.io/rvs/9front-riscv64:latest
-          RUN rm -rf /9front/sys/src/9/riscv64 /9front/sys/src/9/rva23 /9front/sys/src/9/ainekko
-          COPY --chown=110000:110000 . /9front/sys/src/9/
-          END
-
       # - name: Build 9rva23, 9rva23cpuwait and 9maxion
       - name: Build 9rva23 and 9rva23cpuwait
         run: |
           # for conf in rva23 rva23cpuwait maxion; do
           for conf in rva23 rva23cpuwait; do
-            "$FS/rebuild.sh" -c $conf kernel out/9$conf
+            boot/rebuild -a riscv64 -c $conf kernel out/9$conf
           done
           (cd out && sha256sum * >SHA256SUMS)
 
-      # boot-test.sh guesses the objtype only from 9rv64* names
       - name: Boot test 9rva23cpuwait
-        run: $FS/boot-test.sh -a riscv64 out/9rva23cpuwait
+        run: boot/test out/9rva23cpuwait
 
       ## the Maxion hart has no Svpbmt, Zicbom or Sstc: neither may qemu's;
       ## maxion.bootrc runs the smoke test before its shell
@@ -95,7 +74,7 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-      # rebuild.sh and boot-test.sh keep their VM's console when they fail
+      # boot/rebuild and boot/test keep their machine's console when they fail
       - name: Upload consoles
         if: failure()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

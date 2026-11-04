@@ -31,9 +31,12 @@ if(! test -f /$objtype/lib/libc.a){
 	echo kernel: no /$objtype/lib/libc.a: build $objtype first >[1=2]
 	exit userland
 }
-# the mkfile reads the configuration by its name
-if(! ~ $conf $base)
+# the mkfile reads the configuration by its name; the boot file
+# system is the base's, not a stale proto of the copy's own
+if(! ~ $conf $base){
 	cp $base $conf
+	rm -f $conf.bootfs.proto
+}
 mk 'CONF='^$conf install || exit
 if(~ $#clean 0)
 	exit
