@@ -1,0 +1,11 @@
+# objtype	image: the 9front-fs images p9cloud publishes, each a tree
+# built from et at 5039f35a8 (its dist/9front front), by digest
+386	ghcr.io/rvs/9front-386:5039f35a8d34@sha256:ed5321cd2e3de43c9f0d789f6bd8f29773ce1f2551363c26f59d6fb2f52e3c7e
+amd64	ghcr.io/rvs/9front-amd64:5039f35a8d34@sha256:65fd76092c1018b88364c324d0059952cbed75970cf1b9722c188d2473a035b7
+arm	ghcr.io/rvs/9front-arm:5039f35a8d34@sha256:aa5490f5f398fb3cece00e89d43a3213ccc1fa1df1043f619f39597f7b17e00f
+arm64	ghcr.io/rvs/9front-arm64:5039f35a8d34@sha256:8c459bf572ffbffe955fc585abe1c5b54ff199b0e070411e44fb334679f42b6d
+mips	ghcr.io/rvs/9front-mips:5039f35a8d34@sha256:5131f23f6c253a6794b6101bc3ed4a4ba043b8a4d8af3797ae41dbfc8a857f34
+power	ghcr.io/rvs/9front-power:5039f35a8d34@sha256:c79e902db7c09ab1483c2099d757ede5d49d86728a75b0dcc221a471062c61e4
+power64	ghcr.io/rvs/9front-power64:5039f35a8d34@sha256:e265ea75fdc721e338f984e82bed1eafd45e8f46323302140e4d9a05b3decd34
+riscv64	ghcr.io/rvs/9front-riscv64:5039f35a8d34@sha256:a40c7a04dd3b22ef8f73c817116bd9ad9b66d28abdf69d7ad2a39829809c6ed8
+spim	ghcr.io/rvs/9front-spim:5039f35a8d34@sha256:32ddf269634e4ffa6e73d48482e3c9b1a26e81f5635b2ce60c2ed74d473aff6d

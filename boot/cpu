@@ -1,0 +1,117 @@
+#!/bin/bash
+# Boot a cpuwait kernel in qemu, a cpu server for drawterm:
+#
+#	boot/cpu [-a objtype] [-d dir] [-n nvram] [-p port] kernel
+#
+# objtype (default from the kernel's name) picks the machine:
+#
+#	amd64    9pc64cpuwait   qemu-system-x86_64 (KVM if it can)
+#	386      9pccpuwait     qemu-system-x86_64 (KVM if it can)
+#	arm64    9qemucpuwait   qemu-system-aarch64 -M virt, its .u
+#	                        (uImage) beside it
+#	riscv64  9rva23cpuwait  qemu-system-riscv64 -M virt, OpenSBI
+#
+# nvram holds the host owner's key (default boot/docker/cpu.nvram:
+# glenda, authdom cpuwait, password glen||glenda).
+# The rcpu port, 17019, is forwarded from port (default a free one)
+# on all of this host's addresses, so that containers reach it.
+#
+# Without -d, qemu runs in the foreground with the console on stdio.
+# With -d, it runs in the background, its console in dir/console,
+# pid in dir/pid and port in dir/port, and boot/cpu returns once the
+# listener is up.
+#
+# Environment: MEM (1G), SMP (all CPUs with KVM, else 2).
+set -euo pipefail
+prog=boot/cpu
+usage() { echo "usage: $prog [-a objtype] [-d dir] [-n nvram] [-p port] kernel" >&2; exit 2; }
+die() { echo "$prog: $*" >&2; exit 1; }
+boot=$(cd "$(dirname "$0")" && pwd)
+objtype= dir= nvram= port=
+while getopts 'a:d:n:p:' opt; do
+	case $opt in
+	a) objtype=$OPTARG ;;
+	d) dir=$(realpath "$OPTARG") ;;
+	n) nvram=$(realpath "$OPTARG") ;;
+	p) port=$OPTARG ;;
+	*) usage ;;
+	esac
+done
+shift $((OPTIND - 1))
+[ $# -eq 1 ] || usage
+kernel=$(realpath "$1")
+[ -f "$kernel" ] || die "no kernel $1"
+if [ -z "$objtype" ]; then
+	case $(basename "$kernel") in
+	9pc64*) objtype=amd64 ;;
+	9pc*) objtype=386 ;;
+	9qemu*) objtype=arm64 ;;
+	9rva23*|9rv64*) objtype=riscv64 ;;
+	*) die "$kernel: which objtype? -a" ;;
+	esac
+fi
+if [ -z "$port" ]; then
+	# one in the dynamic range that nothing listens on
+	used=" $(awk '$4 == "0A" { sub(/.*:/, "", $2); print $2 }' /proc/net/tcp /proc/net/tcp6 2>/dev/null |
+		while read -r h; do printf '%d ' "0x$h"; done)"
+	for i in $(seq 100); do
+		port=$((49152 + RANDOM % 16384))
+		[[ $used == *" $port "* ]] || break
+	done
+fi
+
+nvram=${nvram:-$boot/docker/cpu.nvram}
+[ -f "$nvram" ] || die "no nvram $nvram"
+own=$(mktemp -d)
+trap 'rm -rf "$own"' EXIT
+
+kvm=
+[ -w /dev/kvm ] && kvm=1
+smp=${SMP:-2}
+case $objtype in
+amd64|386)
+	qemu=(qemu-system-x86_64 -kernel "$kernel")
+	if [ -n "$kvm" ]; then qemu+=(-accel kvm -cpu host); smp=${SMP:-$(nproc)}; fi ;;
+arm64)
+	# the kernel reads its bootargs, memory and cpus from the DTB at
+	# 0x40000000, where qemu does not put it for -kernel
+	[ "${kernel%.u}" = "$kernel" ] && kernel=$kernel.u
+	[ -f "$kernel" ] || die "no uImage $kernel"
+	qemu=(qemu-system-aarch64 -M virt-2.12,gic-version=3 -cpu cortex-a72 -kernel "$kernel") ;;
+riscv64)
+	# the generic kernel needs Svpbmt, Zicbom and Sstc
+	qemu=(qemu-system-riscv64 -M virt -bios default -cpu rv64,svpbmt=true,zicbom=true,sstc=true -kernel "$kernel") ;;
+*) die "no qemu machine for $objtype: amd64, 386, arm64 or riscv64" ;;
+esac
+qemu+=(-m "${MEM:-1G}" -smp "$smp"
+	-append "console=0 sysname=cpu service=cpu nvram=/dev/sdF0/data nobootprompt='cpuwait -g 10.0.2.2 ether /net/ether0 10.0.2.15 255.255.255.0'"
+	-drive "file=$nvram,if=none,id=nvram,format=raw,readonly=on"
+	-device virtio-blk-pci,drive=nvram,disable-legacy=on
+	-netdev "user,id=net,restrict=on,hostfwd=tcp:0.0.0.0:$port-:17019"
+	-device virtio-net-pci,netdev=net,disable-legacy=on
+	-monitor none -display none)
+if [ $objtype = arm64 ]; then
+	"${qemu[@]}" -machine dumpdtb="$own/virt.dtb" >"$own/qemu" 2>&1 || { cat "$own/qemu" >&2; die "cannot dump the DTB"; }
+	[ -z "$dir" ] || { cp "$own/virt.dtb" "$dir/virt.dtb"; }
+	qemu+=(-device "loader,file=${dir:-$own}/virt.dtb,addr=0x40000000,force-raw=on")
+fi
+
+if [ -z "$dir" ]; then
+	echo "$prog: rcpu on port $port" >&2
+	"${qemu[@]}" -serial mon:stdio
+	exit
+fi
+
+# ready when cpuwait's listener says 'listen started' on the console
+t0=$SECONDS
+echo "$port" >"$dir/port"
+"${qemu[@]}" -serial "file:$dir/console" -daemonize -pidfile "$dir/pid" 2>"$dir/qemu" ||
+	{ cat "$dir/qemu" >&2; die "qemu failed"; }
+until grep -qaE 'listen( [^ ]+)? started' "$dir/console"; do
+	if [ $((SECONDS - t0)) -ge 300 ] || ! kill -0 "$(cat "$dir/pid")" 2>/dev/null; then
+		tail -20 "$dir/console" >&2
+		die "no listener"
+	fi
+	sleep 1
+done
+echo "$prog: $objtype $(basename "$kernel"): rcpu on port $port in $((SECONDS - t0)) s" >&2

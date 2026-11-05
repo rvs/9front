@@ -1,0 +1,48 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Roman V Shaposhnik <rvs@apache.org>
+Date: Wed, 28 Oct 2026 16:26:38 +0000
+Subject: [PATCH 5/6] authrhosts.c: fail closed without ruserok
+
+musl has no ruserok.  Refuse rhosts attaches instead of bypassing
+authentication; the container selects -a none on a trusted network.
+
+Co-authored-by: Shelley <shelley@exe.dev>
+---
+ authrhosts.c | 16 ++++------------
+ 1 file changed, 4 insertions(+), 12 deletions(-)
+
+diff --git a/authrhosts.c b/authrhosts.c
+index 2430e6f..4ef56d5 100644
+--- a/authrhosts.c
++++ b/authrhosts.c
+@@ -3,12 +3,8 @@
+ #include <u9fs.h>
+ #include <netdb.h>
+ 
+-/*
+- * return whether the user is authenticated.
+- * uses berkeley-style rhosts ``authentication''.
+- * this is only a good idea behind a firewall,
+- * where you trust your network, and even then
+- * not such a great idea.  it's grandfathered.
++/* ruserok is unavailable on musl. Fail CLOSED, never bypass authentication.
++ * The container entrypoint explicitly selects -a none on a trusted network.
+  */
+ 
+ static char*
+@@ -23,13 +19,9 @@ rhostsauth(Fcall *rx, Fcall *tx)
+ static char*
+ rhostsattach(Fcall *rx, Fcall *tx)
+ {
++	USED(rx);
+ 	USED(tx);
+-
+-	if(ruserok(remotehostname, 0, rx->uname, rx->uname) < 0){
+-		fprint(2, "ruserok(%s, %s) not okay\n", remotehostname, rx->uname);
+-		return "u9fs: rhosts authentication failed";
+-	}
+-	return 0;
++	return "u9fs: rhosts disabled in container runtime";
+ }
+ 
+ Auth authrhosts = {

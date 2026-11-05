@@ -1,0 +1,262 @@
+#!/bin/sh
+# 9front-fs: serve /9front over 9P, hand its kernel to the host, or
+# drawterm to a cpuwait cpu server with /9front as the session's root.
+ROOT=/9front
+KERNEL=$ROOT/amd64/9pc64
+HEALTHCHECK=/usr/local/bin/9p-healthcheck
+SUMS=/usr/local/share/doc/drawterm/SHA256SUMS
+nl='
+'
+
+help() {
+	cat <<'EOF'
+usage: 9front [command]
+  serve               serve /9front over 9P2000 on tcp!*!564 (the default)
+  drawterm [options]  rcpu to a cpuwait cpu server, exporting /9front as root
+  kernel              write the amd64 kernel, 9pc64, to standard output
+  agents.md           how to boot that kernel with QEMU on the host
+  info --json         this image's metadata and settings
+serve:     READ_ONLY (1; 0: experimental writable export)
+agents.md: NINEFRONT_IMAGE (9front-fs), NINEFRONT_HOST_PORT (9564),
+           NINEFRONT_KERNEL_PATH (/tmp/kernel), NINEFRONT_QUIET (0; 1: no banner)
+drawterm:  CPU (found: host.docker.internal, then the default gateway),
+           PORT (17019), AUTH (tcp!127.0.0.1!567: none, so drawterm makes the
+           tickets and DTUSER must be the cpu server's host owner),
+           DTUSER (glenda), ROOT (/9front), WAIT (60 s; 0: don't),
+           PASS (else asked on the tty: -it), DRAWTERM (drawterm.linux-ARCH)
+EOF
+}
+
+die() {
+	echo "9front: $1" >&2
+	exit "${2:-1}"
+}
+
+# get name default [pattern]: the variable name, else default, which
+# must match pattern, an extended regular expression, whole
+get() {
+	eval "v=\${$1-\$2}"
+	if [ -n "${3:-}" ]; then
+		case $v in *"$nl"*) die "bad $1: '$v'" 64 ;; esac
+		printf '%s\n' "$v" | grep -Eqx -- "$3" || die "bad $1: '$v'" 64
+	fi
+}
+
+# quote word: word for sh, quoted if it must be, as shlex.quote does
+quote() {
+	case $1 in
+	'') printf "''" ;;
+	*[!A-Za-z0-9@%+=:,./_-]*) printf "'%s'" "$(printf '%s' "$1" | sed "s/'/'\"'\"'/g")" ;;
+	*) printf '%s' "$1" ;;
+	esac
+}
+
+# decimal digits: the number, without leading zeros
+decimal() {
+	echo "$1" | sed 's/^0*\(.\)/\1/'
+}
+
+# json string
+json() {
+	printf '"%s"' "$(printf '%s' "$1" | sed 's/[\\"]/\\&/g')"
+}
+
+settings() {
+	get NINEFRONT_KERNEL_PATH /tmp/kernel '/[^[:cntrl:]]*'; kpath=$v
+	get NINEFRONT_HOST_PORT 9564 '[0-9]{1,5}'; hport=$(decimal "$v")
+	[ "$hport" -ge 1 ] && [ "$hport" -le 65535 ] || die "bad NINEFRONT_HOST_PORT" 64
+	get NINEFRONT_IMAGE 9front-fs "[^[:space:]'\"]+"; image=$v
+	get READ_ONLY 1 '[01]'; ro=$v
+	get NINEFRONT_QUIET 0 '[01]'; quiet=$v
+	haddr=127.0.0.1
+}
+
+kernel() {
+	[ -f "$KERNEL" ] || die "no $KERNEL"
+	ksize=$(wc -c <"$KERNEL")
+	ksize=$((ksize + 0))
+	set -- $(sha256sum <"$KERNEL")
+	ksum=$1
+}
+
+bool() { [ "$1" = 1 ] && echo true || echo false; }
+
+info() {
+	kernel
+	printf '{\n  "architecture": "amd64",\n'
+	if [ -r "$SUMS" ] && [ -n "$(awk '{print $2}' "$SUMS")" ]; then
+		printf '  "drawterm": [\n'
+		awk '{print $2}' "$SUMS" | sort | while read -r t; do
+			printf '%s    %s' "$sep" "$(json "$t")"
+			sep=",$nl"
+		done
+		printf '\n  ],\n'
+	else
+		printf '  "drawterm": [],\n'
+	fi
+	printf '  "effective": {\n'
+	printf '    "host_address": %s,\n' "$(json "$haddr")"
+	printf '    "host_port": %d,\n' "$hport"
+	printf '    "image": %s,\n' "$(json "$image")"
+	printf '    "kernel_path": %s,\n' "$(json "$kpath")"
+	printf '    "quiet": %s,\n' "$(bool "$quiet")"
+	printf '    "read_only": %s\n' "$(bool "$ro")"
+	printf '  },\n'
+	printf '  "filesystem": {\n'
+	printf '    "authentication": "none",\n'
+	printf '    "container_port": 564,\n'
+	printf '    "protocol": "9P2000",\n'
+	printf '    "read_only_default": true,\n'
+	printf '    "root": %s\n' "$(json "$ROOT")"
+	printf '  },\n'
+	printf '  "image": %s,\n' "$(json "$image")"
+	printf '  "kernel": {\n'
+	printf '    "path": %s,\n' "$(json "$KERNEL")"
+	printf '    "sha256": "%s",\n' "$ksum"
+	printf '    "size": %d\n' "$ksize"
+	printf '  },\n'
+	printf '  "qemu_bundled": false,\n'
+	printf '  "schema_version": 2\n'
+	printf '}\n'
+}
+
+hostscript() {
+	append="console=0 user=glenda sysname=diskless-amd64 fs=10.0.2.100 auth=127.0.0.1 nobootprompt='tcp ether /net/ether0 10.0.2.15 255.255.255.0'"
+	cat <<EOF
+#!/bin/sh
+set -eu
+for t in docker socat qemu-system-x86_64; do
+	command -v \$t >/dev/null 2>&1 || { echo "missing host dependency: \$t" >&2; exit 1; }
+done
+if command -v sha256sum >/dev/null 2>&1; then sum=sha256sum; else sum='shasum -a 256'; fi
+kernel=$(quote "$kpath")
+[ ! -d "\$kernel" ] || { echo "\$kernel is a directory" >&2; exit 1; }
+dir=\${kernel%/*}
+stage=\$(mktemp -d "\${dir:-/}/.9front-kernel.XXXXXX")
+trap 'rm -rf "\$stage"' 0
+trap 'exit 129' HUP; trap 'exit 130' INT; trap 'exit 143' TERM
+docker run --rm $(quote "$image") kernel >"\$stage/kernel"
+set -- \$(\$sum <"\$stage/kernel")
+[ "\$1" = $ksum ] || { echo "kernel SHA-256 mismatch; \$kernel unchanged" >&2; exit 1; }
+mv -f "\$stage/kernel" "\$kernel"
+qemu-system-x86_64 -nodefaults -machine pc,accel=tcg -cpu qemu64 -m 512M -smp 2 -kernel "\$kernel" -append $(quote "$append") -netdev $(quote "user,id=n0,guestfwd=tcp:10.0.2.100:564-cmd:socat STDIO TCP:$haddr:$hport") -device virtio-net-pci,netdev=n0,disable-legacy=on -display none -serial mon:stdio
+EOF
+}
+
+# agents [ready]
+agents() {
+	kernel
+	if [ "$ro" = 1 ]; then mode=read-only; else mode='EXPERIMENTAL WRITABLE (READ_ONLY=0)'; fi
+	printf '# 9front amd64\n\n'
+	if [ -n "${1:-}" ]; then
+		echo "9P2000 ready: version/attach/stat healthcheck passed; $mode export $ROOT."
+	else
+		echo "With no arguments, \`$image\` serves $ROOT over 9P2000 on TCP 564, read-only unless READ_ONLY=0, with no authentication."
+	fi
+	echo "Kernel: $KERNEL, $ksize bytes, SHA-256 $ksum."
+	echo "The script assumes $haddr:$hport on the host reaches container port 564; publish it explicitly, on loopback only."
+	echo "It needs docker, socat and qemu-system-x86_64 on the host (QEMU is not in the image), replaces the kernel file only after checking its SHA-256, and attaches no disks. Run it with the terminal as stdin; never use docker -t with \`kernel\`."
+	if [ -z "${1:-}" ]; then
+		printf '\nStart the server first and wait for its readiness banner:\n\n'
+		printf '    docker run -d --init --name ninefront-amd64 --read-only --cap-drop=ALL --cap-add=SYS_CHROOT --cap-add=DAC_OVERRIDE --cap-add=NET_BIND_SERVICE --security-opt=no-new-privileges:true -p %s -e %s %s\n' \
+			"$(quote "$haddr:$hport:564")" "$(quote "NINEFRONT_HOST_PORT=$hport")" "$(quote "$image")"
+	fi
+	printf '\nQEMU exits with Ctrl-a x. In the guest, `ramfs -m /tmp` gives writable scratch. Afterwards, stop only the server you started.\n\n'
+	printf '```sh\n'
+	hostscript
+	printf '```\n'
+}
+
+serve() {
+	[ -d "$ROOT" ] || die "no $ROOT"
+	# its own process group, which goes with it
+	READ_ONLY=$ro setsid socat TCP-LISTEN:564,reuseaddr,fork,max-children=64 \
+		"EXEC:/usr/local/bin/u9fs -u root -a none -n -l /dev/stderr $ROOT" >/dev/null &
+	server=$!
+	stop=
+	trap 'stop=143' TERM
+	trap 'stop=130' INT
+	end=$(($(date +%s) + 20))
+	until [ -n "$stop" ]; do
+		kill -0 "$server" 2>/dev/null || { wait "$server"; die "9P server exited (status $?)"; }
+		timeout 5 "$HEALTHCHECK" >/dev/null 2>&1 && break
+		[ "$(date +%s)" -le "$end" ] || { kill -KILL -- "-$server"; die "9P server not ready after 20 s"; }
+		sleep 0.1
+	done
+	[ -n "$stop" ] || [ "$quiet" = 1 ] || agents ready >&2
+	until [ -n "$stop" ]; do
+		kill -0 "$server" 2>/dev/null || { wait "$server"; die "9P server exited (status $?)"; }
+		sleep 0.1
+	done
+	kill -TERM -- "-$server" 2>/dev/null
+	sleep 1
+	kill -KILL -- "-$server" 2>/dev/null
+	wait "$server"
+	exit "$stop"
+}
+
+gateway() {
+	awk 'NR > 1 && $2 == "00000000" { print $3; exit }' /proc/net/route 2>/dev/null | {
+		read -r g || exit 0
+		printf '%d.%d.%d.%d\n' "0x$(echo "$g" | cut -c7-8)" "0x$(echo "$g" | cut -c5-6)" \
+			"0x$(echo "$g" | cut -c3-4)" "0x$(echo "$g" | cut -c1-2)"
+	}
+}
+
+# findcpu: the first of hosts whose port sends its first bytes (its
+# p9any offer) within wait: qemu's hostfwd accepts before the guest
+# listens, so a connection alone is not enough.
+findcpu() {
+	if [ -n "$cpu" ]; then hosts=$cpu; else hosts="host.docker.internal $(gateway)"; fi
+	if [ -z "$(printf '%s' "$wait" | tr -d 0.)" ]; then
+		set -- $hosts
+		host=$1
+		return
+	fi
+	end=$(($(date +%s) + ${wait%.*} + 1))
+	while [ "$(date +%s)" -lt "$end" ]; do
+		for h in $hosts; do
+			if [ -n "$(timeout 3 socat -u "TCP:$h:$port,connect-timeout=1,readbytes=1" - 2>/dev/null)" ]; then
+				host=$h
+				return
+			fi
+		done
+		sleep 0.2
+	done
+	host=
+}
+
+drawterm() {
+	case $(uname -m) in
+	x86_64) arch=amd64 ;;
+	aarch64) arch=arm64 ;;
+	*) die "no drawterm for $(uname -m)" ;;
+	esac
+	get DRAWTERM "/usr/local/bin/drawterm.linux-$arch"; dt=$v
+	get CPU ''; cpu=$v
+	get PORT 17019 '[0-9]{1,5}'; port=$(decimal "$v")
+	get WAIT 60 '[0-9]+(\.[0-9]*)?'; wait=$v
+	get ROOT "$ROOT"; root=$v
+	get AUTH 'tcp!127.0.0.1!567'; auth=$v
+	get DTUSER glenda; user=$v
+	[ -x "$dt" ] || die "no $dt"
+	[ -x "$root/amd64/bin/rc" ] || die "$root is not an amd64 9front tree: no amd64/bin/rc"
+	findcpu
+	[ -n "$host" ] || die "nothing answers on port $port after $wait s (tried: ${cpu:-host.docker.internal, the default gateway}): is the cpuwait VM running, with qemu's hostfwd on 0.0.0.0?"
+	# files the session makes are group-writable, as the tree's are
+	umask 002
+	exec "$dt" -h "tcp!$host!$port" -a "$auth" -u "$user" -r "$root" "$@"
+}
+
+case "$#:${1:-}:${2:-}" in
+0::*|1:serve:*) settings; serve ;;
+*:drawterm:*) shift; drawterm "$@" ;;
+1:help:*|1:--help:*|1:-h:*) help ;;
+1:kernel:*)
+	[ ! -t 1 ] || die "refusing to write the kernel to a terminal (no docker -t)"
+	[ -f "$KERNEL" ] || die "no $KERNEL"
+	exec cat "$KERNEL" ;;
+1:agents.md:*|1:AGENTS.md:*) settings; agents ;;
+2:info:--json) settings; info ;;
+*) die "unknown command; see 9front help" 64 ;;
+esac

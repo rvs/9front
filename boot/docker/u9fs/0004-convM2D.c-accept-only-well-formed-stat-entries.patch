@@ -1,0 +1,45 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Roman V Shaposhnik <rvs@apache.org>
+Date: Wed, 28 Oct 2026 16:26:38 +0000
+Subject: [PATCH 4/6] convM2D.c: accept only well-formed stat entries
+
+The entry must be at least STATFIXLEN, its size field must match
+its length exactly, its strings must hold no NUL, and nothing may
+follow them.
+
+Co-authored-by: Shelley <shelley@exe.dev>
+---
+ convM2D.c | 6 ++++++
+ 1 file changed, 6 insertions(+)
+
+diff --git a/convM2D.c b/convM2D.c
+index b83c957..0fd4828 100644
+--- a/convM2D.c
++++ b/convM2D.c
+@@ -32,6 +32,8 @@ convM2D(uchar *buf, uint nbuf, Dir *d, char *strs)
+ 	char *sv[4];
+ 	int i, ns;
+ 
++	if(nbuf < STATFIXLEN || GBIT16(buf) != nbuf-BIT16SZ)
++		return 0;
+ 	p = buf;
+ 	ebuf = buf + nbuf;
+ 
+@@ -67,6 +69,8 @@ convM2D(uchar *buf, uint nbuf, Dir *d, char *strs)
+ 		p += BIT16SZ;
+ 		if(p + ns > ebuf)
+ 			return 0;
++		if(memchr(p, 0, ns) != nil)
++			return 0;
+ 		if(strs){
+ 			sv[i] = strs;
+ 			memmove(strs, p, ns);
+@@ -76,6 +80,8 @@ convM2D(uchar *buf, uint nbuf, Dir *d, char *strs)
+ 		p += ns;
+ 	}
+ 
++	if(p != ebuf)
++		return 0;
+ 	if(strs){
+ 		d->name = sv[0];
+ 		d->uid = sv[1];

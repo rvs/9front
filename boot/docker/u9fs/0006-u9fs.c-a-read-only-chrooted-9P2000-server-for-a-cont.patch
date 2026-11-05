@@ -1,0 +1,700 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Roman V Shaposhnik <rvs@apache.org>
+Date: Wed, 28 Oct 2026 16:26:38 +0000
+Subject: [PATCH 6/6] u9fs.c: a read-only, chrooted 9P2000 server for a
+ container
+
+- READ_ONLY defaults to 1: only READ_ONLY=0 permits open for
+  writing, create, write, remove, wstat or ORCLOSE.
+- Plain 9P2000 only: no 9P1 auto-detection, version "9P2000"
+  exactly, msize at least 256 and at most -m.
+- Frames are bounded: the unsigned length is checked before reading
+  into the buffer; short writes are retried.
+- Path elements are strict: no empty, ".", "..", "/" or NUL names,
+  not even \xx-encoded, and no path longer than PATH_MAX.
+- Load the host's passwd and group, then chroot into the export:
+  no account lookups happen inside the exported tree.  With -a none,
+  -u fixes the user of every attach.
+- Serve only regular files and directories, never devices; a
+  directory's length is 0 everywhere, as in its qid.
+- Tversion clunks all fids; Tremove clunks even on failure; no fid
+  may be NOFID.
+- Fix leaks (dirread, stat, wstat, create) and a wstat rename in /.
+- -l /dev/stderr keeps fd 2, which may not be reopenable.
+
+Co-authored-by: Shelley <shelley@exe.dev>
+---
+ u9fs.c | 313 ++++++++++++++++++++++++++++++++++++++++-----------------
+ 1 file changed, 220 insertions(+), 93 deletions(-)
+
+diff --git a/u9fs.c b/u9fs.c
+index ea0391c..8f57ff3 100644
+--- a/u9fs.c
++++ b/u9fs.c
+@@ -13,6 +13,7 @@
+ #include <stdio.h>	/* for remove [sic] */
+ #include <fcntl.h>	/* for O_RDONLY, etc. */
+ #include <limits.h>	/* for PATH_MAX */
++#include <ctype.h>	/* for isxdigit */
+ 
+ #include <sys/socket.h>	/* various networking crud */
+ #include <netinet/in.h>
+@@ -43,7 +44,7 @@ enum {
+ 
+ typedef struct User User;
+ struct User {
+-	int id;
++	uint id;
+ 	gid_t defaultgid;
+ 	char *name;
+ 	char **mem;	/* group members */
+@@ -93,8 +94,9 @@ void	rremove(Fcall*, Fcall*);
+ 
+ User*	uname2user(char*);
+ User*	gname2user(char*);
+-User*	uid2user(int);
+-User*	gid2user(int);
++User*	uid2user(uint);
++User*	gid2user(uint);
++void	resetfids(void);
+ 
+ Fid*	newfid(int, char**);
+ Fid*	oldfidex(int, int, char**);
+@@ -133,6 +135,8 @@ char	Etoolarge[] =	"i/o count too large";
+ char	Eunknowngroup[] = "unknown group";
+ char	Eunknownuser[] = "unknown user";
+ char	Ewstatbuffer[] = "bogus wstat buffer";
++char	Ereadonly[] = "read-only file system";
++char	Ebadname[] = "invalid path element";
+ 
+ ulong	msize = IOHDRSZ+8192;
+ uchar*	rxbuf;
+@@ -146,7 +150,10 @@ char	hostname[256];
+ char	remotehostname[256];
+ int	chatty9p = 0;
+ int	network = 1;
+-int	old9p = -1;
++int	old9p = 0; /* This runtime accepts plain 9P2000 only. */
++int	readonly = 1;
++int	jailed;
++ulong	maxmsize;
+ int	authed;
+ char*	root;
+ User*	none;
+@@ -186,18 +193,16 @@ char isfrog[256]={
+ char*
+ rootpath(char *path)
+ {
+-	static char buf[PATH_MAX];
+-
+-	if(root == nil)
+-		return path;
+-	snprint(buf, sizeof buf, "%s%s", root, path);
+-	return buf;
++	/* main chroots before serving; no prefix concatenation or truncation. */
++	if(!jailed || root != nil || path == nil || path[0] != '/')
++		sysfatal("invalid jailed path");
++	return path;
+ }
+ 
+ void
+ getfcallnew(int fd, Fcall *fc, int have)
+ {
+-	int len;
++	uint len;
+ 
+ 	if(have > BIT32SZ)
+ 		sysfatal("cannot happen");
+@@ -206,8 +211,9 @@ getfcallnew(int fd, Fcall *fc, int have)
+ 		sysfatal("couldn't read message");
+ 
+ 	len = GBIT32(rxbuf);
+-	if(len <= BIT32SZ)
+-		sysfatal("bogus message");
++	/* Check the unsigned wire length BEFORE reading into the fixed buffer. */
++	if(len < BIT32SZ+BIT8SZ+BIT16SZ || len > msize)
++		sysfatal("bogus message length %ud", len);
+ 
+ 	len -= BIT32SZ;
+ 	if(readn(fd, rxbuf+BIT32SZ, len) != len)
+@@ -246,12 +252,21 @@ getfcallold(int fd, Fcall *fc, int have)
+ void
+ putfcallnew(int wfd, Fcall *tx)
+ {
+-	uint n;
++	uint n, off;
++	ssize_t sent;
+ 
+ 	if((n = convS2M(tx, txbuf, msize)) == 0)
+ 		sysfatal("couldn't format message type %d", tx->type);
+-	if(write(wfd, txbuf, n) != n)
+-		sysfatal("couldn't send message");
++	/* Stream transports may successfully write fewer bytes than requested. */
++	for(off=0; off<n; off+=sent){
++		sent = write(wfd, txbuf+off, n-off);
++		if(sent < 0 && errno == EINTR){
++			sent = 0;
++			continue;
++		}
++		if(sent <= 0)
++			sysfatal("couldn't send message");
++	}
+ }
+ 
+ void
+@@ -268,28 +283,8 @@ putfcallold(int wfd, Fcall *tx)
+ void
+ getfcall(int fd, Fcall *fc)
+ {
+-	if(old9p == 1){
+-		getfcallold(fd, fc, 0);
+-		return;
+-	}
+-	if(old9p == 0){
+-		getfcallnew(fd, fc, 0);
+-		return;
+-	}
+-
+-	/* auto-detect */
+-	if(readn(fd, rxbuf, 3) != 3)
+-		sysfatal("couldn't read message");
+-
+-	/* is it an old (9P1) message? */
+-	if(50 <= rxbuf[0] && rxbuf[0] <= 87 && (rxbuf[0]&1)==0 && GBIT16(rxbuf+1) == 0xFFFF){
+-		old9p = 1;
+-		getfcallold(fd, fc, 3);
+-		return;
+-	}
+-
+-	getfcallnew(fd, fc, 3);
+-	old9p = 0;
++	/* Never auto-detect the legacy protocol: it has separate unsafe framing. */
++	getfcallnew(fd, fc, 0);
+ }
+ 
+ void
+@@ -378,13 +373,13 @@ serve(int rfd, int wfd)
+ void
+ rversion(Fcall *rx, Fcall *tx)
+ {
+-	if(msize > rx->msize)
+-		msize = rx->msize;
++	/* IOHDRSZ subtraction elsewhere must not wrap after negotiation. */
++	if(rx->msize < 256)
++		sysfatal("negotiated message size too small");
++	resetfids();
++	msize = rx->msize < maxmsize ? rx->msize : maxmsize;
+ 	tx->msize = msize;
+-	if(strncmp(rx->version, "9P", 2) != 0)
+-		tx->version = "unknown";
+-	else
+-		tx->version = "9P2000";
++	tx->version = strcmp(rx->version, "9P2000") == 0 ? "9P2000" : "unknown";
+ }
+ 
+ void
+@@ -406,20 +401,17 @@ rattach(Fcall *rx, Fcall *tx)
+ 	if(rx->aname == nil)
+ 		rx->aname = "";
+ 
++	/* This image serves only ordinary files and directories, never devices. */
+ 	if(strcmp(rx->aname, "device") == 0){
+-		if(connected && !devallowed){
+-			seterror(tx, Especial0);
+-			return;
+-		}
+-		devallowed = 1;
+-	}else{
+-		if(connected && devallowed){
+-			seterror(tx, Especial1);
+-			return;
+-		}
++		seterror(tx, Especial);
++		return;
+ 	}
+ 
+-	if(strcmp(rx->uname, "none") == 0){
++	/* Boot clients may initially attach as none; -u fixes their identity. */
++	if(defaultuser != nil && auth == &authnone){
++		rx->uname = defaultuser;
++		authed++;
++	}else if(strcmp(rx->uname, "none") == 0){
+ 		if(authed == 0){
+ 			seterror(tx, Eauth);
+ 			return;
+@@ -529,6 +521,12 @@ ropen(Fcall *rx, Fcall *tx)
+ 	char *e;
+ 	Fid *fid;
+ 
++	if(readonly && ((rx->mode&3) == OWRITE || (rx->mode&3) == ORDWR
++	|| (rx->mode & ~(3|OCEXEC)))){
++		seterror(tx, Ereadonly);
++		return;
++	}
++
+ 	if((fid = oldfid(rx->fid, &e)) == nil){
+ 		seterror(tx, e);
+ 		return;
+@@ -544,7 +542,7 @@ ropen(Fcall *rx, Fcall *tx)
+ 		return;
+ 	}
+ 
+-	if(!devallowed && S_ISSPECIAL(fid->st.st_mode)){
++	if(!S_ISREG(fid->st.st_mode) && !S_ISDIR(fid->st.st_mode)){
+ 		seterror(tx, Especial);
+ 		return;
+ 	}
+@@ -564,6 +562,11 @@ rcreate(Fcall *rx, Fcall *tx)
+ 	char *e;
+ 	Fid *fid;
+ 
++	if(readonly){
++		seterror(tx, Ereadonly);
++		return;
++	}
++
+ 	if((fid = oldfid(rx->fid, &e)) == nil){
+ 		seterror(tx, e);
+ 		return;
+@@ -662,7 +665,10 @@ stat2qid(struct stat *st)
+ 			*(dev_t*)q ^= st->st_dev;
+ 	}
+ 
+-	qid.vers = st->st_mtime ^ (st->st_size << 8);
++	/* Linux directory storage size is not a 9P directory length. Every qid
++	 * producer (walk, open, stat and readdir) must use the same zero size.
++	 */
++	qid.vers = st->st_mtime ^ ((S_ISDIR(st->st_mode) ? 0 : (u64int)st->st_size) << 8);
+ 	qid.type = modebyte(st);
+ 	return qid;
+ }
+@@ -687,27 +693,45 @@ char *
+ defrog(char *s)
+ {
+ 	char *d, *dst, buf[3];
++	int c;
+ 
+ 	d = dst = emalloc(strlen(s) + 1);
+-	for(; *s; s++)
+-		if(*s == '\\' && strlen(s) >= 3){
+-			buf[0] = *++s;			/* skip \ */
+-			buf[1] = *++s;
++	for(; *s; s++){
++		c = (uchar)*s;
++		if(c == '\\'){
++			if(s[1] == 0 || s[2] == 0
++			|| !isxdigit((uchar)s[1]) || !isxdigit((uchar)s[2]))
++				goto bad;
++			buf[0] = s[1];
++			buf[1] = s[2];
+ 			buf[2] = 0;
+-			*d++ = strtoul(buf, NULL, 16);
+-		} else
+-			*d++ = *s;
++			c = strtoul(buf, nil, 16);
++			s += 2;
++		}
++		if(c == 0 || c == '/')
++			goto bad;
++		*d++ = c;
++	}
+ 	*d = 0;
++	/* Encoded aliases must not turn into navigation components. */
++	if(dst[0] == 0 || strcmp(dst, ".") == 0 || strcmp(dst, "..") == 0)
++		goto bad;
+ 	return dst;
++bad:
++	free(dst);
++	errno = EINVAL;
++	return nil;
+ }
+ 
+ void
+ stat2dir(char *path, struct stat *st, Dir *d)
+ {
+ 	User *u;
+-	char *q, *p, *npath;
++	char *q;
+ 
+ 	memset(d, 0, sizeof(*d));
++	if(S_ISDIR(st->st_mode))
++		st->st_size = 0;
+ 	d->qid = stat2qid(st);
+ 	d->mode = plan9mode(st);
+ 	d->atime = st->st_atime;
+@@ -789,6 +813,10 @@ rread(Fcall *rx, Fcall *tx)
+ 			}
+ 			rpath = rootpath(fid->path);
+ 			path = estrpath(rpath, fid->dirent->d_name, 0);
++			if(path == nil){
++				fid->dirent = nil;
++				continue;
++			}
+ 			memset(&st, 0, sizeof st);
+ 			if(stat(path, &st) < 0){
+ 				fprint(2, "dirread: stat(%s) failed: %s\n", path, strerror(errno));
+@@ -798,7 +826,9 @@ rread(Fcall *rx, Fcall *tx)
+ 			}
+ 			free(path);
+ 			stat2dir(fid->dirent->d_name, &st, &d);
+-			if((n=(old9p ? convD2Mold : convD2M)(&d, p, ep-p)) <= BIT16SZ)
++			n = convD2M(&d, p, ep-p);
++			free(d.name);
++			if(n <= BIT16SZ)
+ 				break;
+ 			p += n;
+ 			fid->dirent = nil;
+@@ -821,6 +851,11 @@ rwrite(Fcall *rx, Fcall *tx)
+ 	Fid *fid;
+ 	int n;
+ 
++	if(readonly){
++		seterror(tx, Ereadonly);
++		return;
++	}
++
+ 	if(rx->count > msize-IOHDRSZ){
+ 		seterror(tx, Etoolarge);
+ 		return;
+@@ -870,7 +905,7 @@ rclunk(Fcall *rx, Fcall *tx)
+ 			}
+ 		}
+ 	}
+-	else if(fid->omode != -1 && fid->omode&ORCLOSE){
++	else if(!readonly && fid->omode != -1 && fid->omode&ORCLOSE){
+ 		rpath = rootpath(fid->path);
+ 		remove(rpath);
+ 	}
+@@ -887,8 +922,11 @@ rremove(Fcall *rx, Fcall *tx)
+ 		seterror(tx, e);
+ 		return;
+ 	}
+-	if(userremove(fid, &e) < 0)
++	if(readonly)
++		seterror(tx, Ereadonly);
++	else if(userremove(fid, &e) < 0)
+ 		seterror(tx, e);
++	/* Tremove clunks its fid even on failure. */
+ 	freefid(fid);
+ }
+ 
+@@ -910,8 +948,9 @@ rstat(Fcall *rx, Fcall *tx)
+ 	}
+ 
+ 	stat2dir(fid->path, &fid->st, &d);
+-	if((tx->nstat=(old9p ? convD2Mold : convD2M)(&d, tx->stat, msize)) <= BIT16SZ)
++	if((tx->nstat=convD2M(&d, tx->stat, msize-IOHDRSZ)) <= BIT16SZ)
+ 		seterror(tx, "convD2M fails");
++	free(d.name);
+ }
+ 
+ void
+@@ -923,6 +962,11 @@ rwstat(Fcall *rx, Fcall *tx)
+ 	Dir d;
+ 	Fid *fid;
+ 
++	if(readonly){
++		seterror(tx, Ereadonly);
++		return;
++	}
++
+ 	if((fid = oldfid(rx->fid, &e)) == nil){
+ 		seterror(tx, e);
+ 		return;
+@@ -980,6 +1024,15 @@ rwstat(Fcall *rx, Fcall *tx)
+ 		return;
+ 	}
+ 
++	if(d.name[0]){
++		if(strcmp(d.name, ".") == 0 || strcmp(d.name, "..") == 0
++		|| (p = defrog(d.name)) == nil){
++			seterror(tx, Ebadname);
++			return;
++		}
++		free(p);
++	}
++
+ 	/*
+ 	 * try things in increasing order of harm to the file.
+ 	 * mtime should come after truncate so that if you
+@@ -1020,13 +1073,22 @@ rwstat(Fcall *rx, Fcall *tx)
+ 	if(d.name[0]){
+ 		old = fid->path;
+ 		dir = estrdup(fid->path);
+-		if((p = strrchr(dir, '/')) > dir)
+-			*p = '\0';
+-		else{
++		if((p = strrchr(dir, '/')) != nil){
++			if(p == dir)
++				p[1] = '\0';
++			else
++				*p = '\0';
++		}else{
+ 			seterror(tx, "whoops: can't happen in u9fs");
+ 			return;
+ 		}
+ 		new = estrpath(dir, d.name, 1);
++		if(new == nil){
++			seterror(tx, Ebadname);
++			free(dir);
++			free(opath);
++			return;
++		}
+ 		npath = rootpath(new);
+ 		if(strcmp(old, new) != 0 && rename(opath, npath) < 0){
+ 			if(chatty9p)
+@@ -1041,14 +1103,16 @@ rwstat(Fcall *rx, Fcall *tx)
+ 		free(old);
+ 		free(dir);
+ 		free(opath);
+-		opath = npath;
++		opath = estrdup(npath);
+ 	}
+ 
+ 	if((u64int)d.length != (u64int)~0 && truncate(opath, d.length) < 0){
+ 		fprint(2, "truncate(%s, %lld) failed\n", opath, d.length);
+ 		seterror(tx, strerror(errno));
++		free(opath);
+ 		return;
+ 	}
++	free(opath);
+ }
+ 
+ /*
+@@ -1126,13 +1190,13 @@ uname2user(char *name)
+ 			if(strcmp(u->name, name) == 0)
+ 				return u;
+ 
+-	if((p = getpwnam(name)) == nil)
++	if(jailed || (p = getpwnam(name)) == nil)
+ 		return nil;
+ 	return adduser(p);
+ }
+ 
+ User*
+-uid2user(int id)
++uid2user(uint id)
+ {
+ 	User *u;
+ 	struct passwd *p;
+@@ -1141,7 +1205,7 @@ uid2user(int id)
+ 		if(u->id == id)
+ 			return u;
+ 
+-	if((p = getpwuid(id)) == nil)
++	if(jailed || (p = getpwuid(id)) == nil)
+ 		return nil;
+ 	return adduser(p);
+ }
+@@ -1158,13 +1222,13 @@ gname2user(char *name)
+ 			if(strcmp(u->name, name) == 0)
+ 				return u;
+ 
+-	if((g = getgrnam(name)) == nil)
++	if(jailed || (g = getgrnam(name)) == nil)
+ 		return nil;
+ 	return addgroup(g);
+ }
+ 
+ User*
+-gid2user(int id)
++gid2user(uint id)
+ {
+ 	User *u;
+ 	struct group *g;
+@@ -1173,7 +1237,7 @@ gid2user(int id)
+ 		if(u->id == id)
+ 			return u;
+ 
+-	if((g = getgrgid(id)) == nil)
++	if(jailed || (g = getgrgid(id)) == nil)
+ 		return nil;
+ 	return addgroup(g);
+ }
+@@ -1233,7 +1297,14 @@ char*
+ estrpath(char *p, char *q, int frog)
+ {
+ 	char *r, *s;
++	size_t n;
+ 
++	if(q[0] == 0 || strchr(q, '/') != nil){
++		errno = EINVAL;
++		return nil;
++	}
++	if(strcmp(q, ".") == 0)
++		return estrdup(p);
+ 	if(strcmp(q, "..") == 0){
+ 		r = estrdup(p);
+ 		if((s = strrchr(r, '/')) && s > r)
+@@ -1242,12 +1313,16 @@ estrpath(char *p, char *q, int frog)
+ 			s[1] = '\0';
+ 		return r;
+ 	}
+-
+-	if(frog)
+-		q = defrog(q);
+-	else
+-		q = strdup(q);
+-	r = emalloc(strlen(p)+1+strlen(q)+1);
++	q = frog ? defrog(q) : estrdup(q);
++	if(q == nil)
++		return nil;
++	n = strlen(p)+1+strlen(q)+1;
++	if(n > PATH_MAX){
++		free(q);
++		errno = ENAMETOOLONG;
++		return nil;
++	}
++	r = emalloc(n);
+ 	strcpy(r, p);
+ 	if(r[0]=='\0' || r[strlen(r)-1] != '/')
+ 		strcat(r, "/");
+@@ -1274,6 +1349,10 @@ newfid(int fid, char **ep)
+ {
+ 	Fid *f;
+ 
++	if((uint)fid == (uint)~0){
++		*ep = Ebadfid;
++		return nil;
++	}
+ 	if(lookupfid(fid) != nil){
+ 		*ep = Efidactive;
+ 		return nil;
+@@ -1353,12 +1432,19 @@ freefid(Fid *f)
+ 		f->next->prev = f->prev;
+ 	if(f->dir)
+ 		closedir(f->dir);
+-	if(f->fd)
++	if(f->fd >= 0)
+ 		close(f->fd);
+ 	free(f->path);
+ 	free(f);
+ }
+ 
++void
++resetfids(void)
++{
++	while(fidtab[0] != nil)
++		freefid(fidtab[0]);
++}
++
+ int
+ fidstat(Fid *fid, char **ep)
+ {
+@@ -1510,6 +1596,8 @@ userperm(User *u, char *path, int type, int need)
+ 	if(((have|((st.st_mode>>3)&7))&need) != need)	/* group won't help */
+ 		return -1;
+ 	g = gid2user(st.st_gid);
++	if(g == nil)
++		return -1;
+ 	for(i=0; i<g->nmem; i++){
+ 		if(strcmp(g->mem[i], u->name) == 0){
+ 			have |= (st.st_mode>>3)&7;
+@@ -1528,6 +1616,10 @@ userwalk(User *u, char **path, char *elem, Qid *qid, char **ep)
+ 	struct stat st;
+ 
+ 	npath = estrpath(*path, elem, 1);
++	if(npath == nil){
++		*ep = Ebadname;
++		return -1;
++	}
+ 	rpath = rootpath(npath);
+ 	if(stat(rpath, &st) < 0){
+ 		free(npath);
+@@ -1620,6 +1712,7 @@ usercreate(Fid *fid, char *elem, int omode, long perm, char **ep)
+ 	struct stat st, parent;
+ 	User *u;
+ 
++	opath = fid->path;
+ 	rpath = rootpath(fid->path);
+ 	if(stat(rpath, &parent) < 0){
+ 		*ep = strerror(errno);
+@@ -1638,7 +1731,11 @@ usercreate(Fid *fid, char *elem, int omode, long perm, char **ep)
+ 	m = (perm & DMDIR) ? 0777 : 0666;
+ 	perm = perm & (~m | (fid->st.st_mode & m));
+ 
+-	npath = estrpath(rpath, elem, 1);
++	if(strcmp(elem, ".") == 0 || strcmp(elem, "..") == 0
++	|| (npath = estrpath(rpath, elem, 1)) == nil){
++		*ep = Ebadname;
++		return -1;
++	}
+ 	if(perm & DMDIR){
+ 		if((omode&~ORCLOSE) != OREAD){
+ 			*ep = Eperm;
+@@ -1728,6 +1825,7 @@ usercreate(Fid *fid, char *elem, int omode, long perm, char **ep)
+ 	}
+ 	fid->omode = omode;
+ 	free(opath);
++	free(npath);
+ 	return 0;
+ }
+ 
+@@ -1754,7 +1852,9 @@ usage(void)
+ int
+ main(int argc, char **argv)
+ {
+-	char *authtype;
++	char *authtype, *ro;
++	struct passwd *pw;
++	struct group *gr;
+ 	int i;
+ 	int fd;
+ 	int logflag;
+@@ -1793,10 +1893,19 @@ main(int argc, char **argv)
+ 		logflag |= O_TRUNC;
+ 	}ARGEND
+ 
+-	if(argc > 1)
++	if(argc != 1)
+ 		usage();
+ 
+-	fd = open(logfile, logflag, 0666);
++	ro = getenv("READ_ONLY");
++	if(ro != nil && strcmp(ro, "0") != 0 && strcmp(ro, "1") != 0)
++		sysfatal("READ_ONLY must be 0 or 1");
++	readonly = ro == nil || strcmp(ro, "0") != 0;
++	if(msize < 256 || msize > 1024*1024)
++		sysfatal("msize must be between 256 and 1048576");
++	maxmsize = msize;
++
++	/* Keep Docker/socat's stderr fd, even when it is not a reopenable file. */
++	fd = strcmp(logfile, "/dev/stderr") == 0 ? 2 : open(logfile, logflag, 0666);
+ 	if(fd < 0)
+ 		sysfatal("cannot open log '%s'", logfile);
+ 
+@@ -1826,13 +1935,31 @@ main(int argc, char **argv)
+ 
+ 	umask(0);
+ 
+-	if(argc == 1)
+-		root = argv[0];
+-
++	/* Preserve the extractor's Linux owner/group mapping outside /9front.
++	 * No libc/NSS account lookup is permitted after chroot, including misses.
++	 */
++	setpwent();
++	while((pw = getpwent()) != nil)
++		adduser(pw);
++	endpwent();
++	setgrent();
++	while((gr = getgrent()) != nil)
++		addgroup(gr);
++	endgrent();
++	if(defaultuser != nil && uname2user(defaultuser) == nil)
++		sysfatal("unknown fixed user %s", defaultuser);
+ 	none = uname2user("none");
+ 	if(none == nil)
+ 		none = uname2user("nobody");
+ 
++	/* No tools or account databases need to be copied into the pristine tree.
++	 * The container, not a privileged chroot, is the exploitation boundary.
++	 */
++	if(chroot(argv[0]) < 0 || chdir("/") < 0)
++		sysfatal("cannot chroot to export root");
++	root = nil;
++	jailed = 1;
++	fprint(2, "u9fs: 9P2000 %s\n", readonly ? "read-only" : "WRITABLE (experimental)");
+ 	serve(0, 1);
+ 	return 0;
+ }
