@@ -1,0 +1,12 @@
+root:x:0:
+adm:x:99999:
+none:x:100000:
+tor:x:100001:
+glenda:x:100002:
+sys:x:110000:
+map:x:110001:
+doc:x:110002:
+upas:x:110003:
+font:x:110004:
+cdrom:x:200000:
+plan9:x:200001:

@@ -1,0 +1,143 @@
+#!/bin/bash
+# Boot a cpuwait kernel in qemu and test it over drawterm:
+#
+#	boot/test [-a objtype] [-w] [-r root] kernel [tar]
+#
+# kernel is a cpuwait kernel boot/cpu boots (objtype by default from
+# its name).  The session's root is the objtype's image's tree
+# (boot/images; IMAGE overrides), updated by boot/sync to HEAD (-w: the
+# working tree), with tar (a userland boot/rebuild wrote) unpacked in
+# it.  The tests, each its own drawterm session:
+#
+#	login:   glenda, with PASS, gets objtype's shell
+#	native:  ls and rc, built there with objtype's compiler from the
+#	         tree's sources, are identical to /objtype/bin's (so the
+#	         userland must be built from the same sources: tar)
+#	status:  a failing command fails drawterm
+#	pass:    another password is refused
+#
+# It runs as docker buildx build of boot/Dockerfile, as boot/rebuild
+# does (ACCEL), the kernel and tar sent as the context kernel.  In a
+# container that has the tree, qemu and drawterm, -r root tests there,
+# in the tree root.
+#
+# Environment: IMAGE, ACCEL, PASS (glen||glenda), MEM and SMP
+# (boot/cpu's).
+set -euo pipefail
+prog=boot/test
+usage() { echo "usage: $prog [-a objtype] [-w] [-r root] kernel [tar]" >&2; exit 2; }
+die() { echo "$prog: $*" >&2; exit 1; }
+objtype= work= root=
+while getopts 'a:r:w' opt; do
+	case $opt in
+	a) objtype=$OPTARG ;;
+	r) root=$(realpath "$OPTARG") ;;
+	w) work=-w ;;
+	*) usage ;;
+	esac
+done
+shift $((OPTIND - 1))
+[ $# -ge 1 ] && [ $# -le 2 ] || usage
+kernel=$(realpath "$1") tar=${2:+$(realpath "$2")}
+[ -f "$kernel" ] || die "no kernel $1"
+[ -z "$tar" ] || [ -f "$tar" ] || die "no tar $tar"
+if [ -z "$objtype" ]; then
+	case $(basename "$kernel") in
+	9pc64*) objtype=amd64 ;;
+	9pc*)   objtype=386 ;;
+	9qemu*) objtype=arm64 ;;
+	9rva23*|9rv64*) objtype=riscv64 ;;
+	*) die "$kernel: which objtype? -a" ;;
+	esac
+fi
+boot=$(cd "$(dirname "$0")" && pwd)
+# as sys, when root
+assys() {
+	if [ "$(id -u)" = 0 ]; then
+		chroot --userspec=110000:110000 --skip-chdir / "$@"
+	else
+		"$@"
+	fi
+}
+pass=${PASS:-glen||glenda}
+tmp=$(mktemp -d)
+
+if [ -z "$root" ]; then
+	trap 'rm -rf "$tmp"' EXIT
+	image=${IMAGE:-$(awk -v a="$objtype" '$1 == a { print $2 }' "$boot/images")}
+	[ -n "$image" ] || die "no image for $objtype in boot/images"
+	if [ -z "${ACCEL:-}" ]; then
+		ACCEL=tcg
+		case $(docker buildx inspect 2>/dev/null) in *security.insecure*) ACCEL=kvm ;; esac
+	fi
+	# the context: the kernel, its uImage, and tar
+	mkdir "$tmp/kernel"
+	for f in "$kernel" "$kernel.u" $tar; do
+		[ -f "$f" ] && { ln "$f" "$tmp/kernel/" 2>/dev/null || cp "$f" "$tmp/kernel/"; }
+	done
+	args=(--progress=plain -f "$boot/Dockerfile" --build-arg "SEED=$image" --build-arg "ACCEL=$ACCEL"
+		--build-arg "OBJTYPE=$objtype" --build-arg "WORK=$work"
+		--build-arg "KERNEL=$(basename "$kernel")" --build-arg "TAR=${tar:+$(basename "$tar")}"
+		--build-context "kernel=$tmp/kernel" --target test --no-cache-filter "test-$ACCEL"
+		--output type=cacheonly)
+	[ "$ACCEL" = kvm ] && args+=(--allow security.insecure)
+	for v in MEM SMP; do [ -z "${!v:-}" ] || args+=(--build-arg "$v=${!v}"); done
+	docker buildx build "${args[@]}" "$boot/.."
+	exit
+fi
+
+[ -x "$root/amd64/bin/rc" ] || die "$root: no amd64 9front tree"
+cleanup() {
+	st=$?
+	[ -f "$tmp/pid" ] && kill "$(cat "$tmp/pid")" 2>/dev/null
+	if [ $st -ne 0 ] && [ -f "$tmp/console" ]; then
+		echo "$prog: the machine's console:" >&2
+		tr -d '\r' <"$tmp/console" | tail -30 >&2
+	fi
+	rm -rf "$tmp"
+}
+trap cleanup EXIT
+trap 'exit 1' INT TERM HUP
+
+"$boot/sync" $work "$root" || die "sync failed"
+if [ -n "$tar" ]; then
+	tar -C "$(dirname "$root")" -xpf "$tar" || die "cannot unpack $tar"
+fi
+[ -x "$root/$objtype/bin/rc" ] || die "no /$objtype/bin/rc in the tree: tar"
+# not in /tmp: drawterm covers the root's /tmp with its own
+assys sh -c "umask 002; cat >'$root/sys/lib/boot-test.rc'" <<'EOF'
+rfork e
+fn fail { echo boot-test: FAIL $* >[1=2]; exit fail }
+u=`{cat /dev/user}
+~ $cputype $1 || fail cputype $cputype, not $1
+~ $u glenda || fail user $u
+echo boot-test: ok login $u $cputype `{cat /dev/sysname}
+objtype=$cputype
+O=`{sed -n 's/^O=//p' /$objtype/mkfile}
+cd /sys/src/cmd
+mk $O.ls >/dev/null || fail native: mk $O.ls
+cmp $O.ls /$objtype/bin/ls || fail native: ls differs
+rm -f $O.ls ls.$O
+cd rc
+mk $O.out >/dev/null || fail native: mk rc
+cmp $O.out /$objtype/bin/rc || fail native: rc differs
+mk clean >/dev/null
+echo boot-test: ok native ls rc
+EOF
+
+"$boot/cpu" -a "$objtype" -d "$tmp" "$kernel" || die "no cpu server"
+port=$(cat "$tmp/port")
+
+dt() {
+	assys env CPU=127.0.0.1 "PORT=$port" "ROOT=$root" "PASS=$1" \
+		"$boot/docker/9front" drawterm -G -c "$2" </dev/null 2>&1 | tr -d '\r'
+}
+dt "$pass" "rc /sys/lib/boot-test.rc $objtype" | tee "$tmp/log" || die "login or native failed"
+grep -q '^boot-test: ok native' "$tmp/log" || die "login or native failed"
+if dt "$pass" 'echo boot-test: in; exit fail' >"$tmp/log"; then die "status: a failing command succeeded"; fi
+# failed for the command, not for want of a session
+grep -q '^boot-test: in' "$tmp/log" || { cat "$tmp/log" >&2; die "status: no session"; }
+echo "boot-test: ok status"
+if dt "not-$pass" 'echo in' >"$tmp/log"; then die "pass: another password got in"; fi
+grep -q 'cannot read authenticator' "$tmp/log" || { cat "$tmp/log" >&2; die "pass: not refused"; }
+echo "boot-test: ok pass"

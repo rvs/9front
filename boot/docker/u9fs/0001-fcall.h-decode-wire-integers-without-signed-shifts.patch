@@ -1,0 +1,31 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Roman V Shaposhnik <rvs@apache.org>
+Date: Wed, 28 Oct 2026 16:26:38 +0000
+Subject: [PATCH 1/6] fcall.h: decode wire integers without signed shifts
+
+GBIT32 shifted (int)p[3] left by 24, which is undefined for bytes
+above 0x7f, and GBIT64 inherited it.  Decode hostile wire integers
+as u32int and u64int instead.
+
+Co-authored-by: Shelley <shelley@exe.dev>
+---
+ fcall.h | 6 +++---
+ 1 file changed, 3 insertions(+), 3 deletions(-)
+
+diff --git a/fcall.h b/fcall.h
+index d8ca20e..87b6293 100644
+--- a/fcall.h
++++ b/fcall.h
+@@ -47,9 +47,9 @@ struct	Fcall
+ 
+ #define	GBIT8(p)	((p)[0])
+ #define	GBIT16(p)	((p)[0]|((p)[1]<<8))
+-#define	GBIT32(p)	((p)[0]|((p)[1]<<8)|((p)[2]<<16)|((p)[3]<<24))
+-#define	GBIT64(p)	((u32int)((p)[0]|((p)[1]<<8)|((p)[2]<<16)|((p)[3]<<24)) |\
+-				((vlong)((p)[4]|((p)[5]<<8)|((p)[6]<<16)|((p)[7]<<24)) << 32))
++/* Decode hostile wire integers without signed-shift undefined behavior. */
++#define GBIT32(p) ((u32int)(p)[0] | ((u32int)(p)[1]<<8) | ((u32int)(p)[2]<<16) | ((u32int)(p)[3]<<24))
++#define GBIT64(p) ((u64int)GBIT32(p) | ((u64int)GBIT32((p)+4)<<32))
+ 
+ #define	PBIT8(p,v)	(p)[0]=(v)
+ #define	PBIT16(p,v)	(p)[0]=(v);(p)[1]=(v)>>8

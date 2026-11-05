@@ -1,0 +1,46 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Roman V Shaposhnik <rvs@apache.org>
+Date: Wed, 28 Oct 2026 16:26:38 +0000
+Subject: [PATCH 3/6] convM2S.c: reject NULs in strings and counts past the
+ buffer
+
+A string with an embedded NUL would be silently truncated in C.
+p+f->count can wrap for a large count; compare the count with the
+bytes left instead.
+
+Co-authored-by: Shelley <shelley@exe.dev>
+---
+ convM2S.c | 6 ++++--
+ 1 file changed, 4 insertions(+), 2 deletions(-)
+
+diff --git a/convM2S.c b/convM2S.c
+index 2fc6389..8907087 100644
+--- a/convM2S.c
++++ b/convM2S.c
+@@ -13,6 +13,8 @@ gstring(uchar *p, uchar *ep, char **s)
+ 	p += BIT16SZ - 1;
+ 	if(p+n+1 > ep)
+ 		return nil;
++	if(memchr(p+1, 0, n) != nil)
++		return nil;
+ 	/* move it down, on top of count, to make room for '\0' */
+ 	memmove(p, p + 1, n);
+ 	p[n] = '\0';
+@@ -221,7 +223,7 @@ b
+ 		p += BIT64SZ;
+ 		f->count = GBIT32(p);
+ 		p += BIT32SZ;
+-		if(p+f->count > ep)
++		if(f->count > (uint)(ep-p))
+ 			return 0;
+ 		f->data = (char*)p;
+ 		p += f->count;
+@@ -342,7 +344,7 @@ b
+ 			return 0;
+ 		f->count = GBIT32(p);
+ 		p += BIT32SZ;
+-		if(p+f->count > ep)
++		if(f->count > (uint)(ep-p))
+ 			return 0;
+ 		f->data = (char*)p;
+ 		p += f->count;

@@ -1,0 +1,222 @@
+#!/bin/bash
+# Update a 9front tree to this checkout:
+#
+#	boot/sync [-w] [-x path]... root
+#
+# brings the tree root (a 9front-fs image's /9front) from its commit
+# (its dist/9front/.git/refs/heads/front), which must be in this
+# repository, to HEAD, as 9front's git/pull and git/branch would, but
+# with this host's git, in seconds.  With -w, the files are the
+# working tree's (tracked and untracked but not ignored), and the
+# tree's repository still moves to HEAD, so 9front's git/diff shows
+# the difference.
+#
+# - only the files that differ are written, with git's modes as 664
+#   or 775 and the time now; new files and directories belong to sys,
+#   changed files keep their owners;
+# - files edited in the tree get a three-way merge (git merge-file);
+#   a conflict, or a file edited in the tree but removed here, fails;
+#   files changed here but absent from the tree stay absent;
+# - removed files are removed;
+# - the tree's repository moves to HEAD: a pack of the new objects,
+#   refs/heads/front, and INDEX9 lines, as git/branch writes them;
+# - /sys/lib/rootstub makes the directories every objtype installs
+#   into.
+#
+# The top-level paths boot, .github and AGENTS.md, this host's, and
+# any named with -x are left out of the tree, but not of its
+# repository.  Owners change only when run as root.
+set -euo pipefail
+prog=boot/sync
+usage() { echo "usage: $prog [-w] [-x path]... root" >&2; exit 2; }
+die() { echo "$prog: $*" >&2; exit 1; }
+sys=110000
+work= exclude=(boot .github AGENTS.md)
+while getopts 'wx:' opt; do
+	case $opt in
+	w) work=1 ;;
+	x) exclude+=("$OPTARG") ;;
+	*) usage ;;
+	esac
+done
+shift $((OPTIND - 1))
+[ $# -eq 1 ] || usage
+root=$(realpath "$1")
+src=$(cd "$(dirname "$0")/.." && pwd)
+git() { command git -C "$src" "$@"; }
+repo=$root/dist/9front/.git
+owner=
+[ "$(id -u)" = 0 ] && owner=1
+
+seed=$(cat "$repo/refs/heads/front" 2>/dev/null) || die "$root: no 9front tree"
+want=$(git rev-parse HEAD)
+git cat-file -e "$seed^{commit}" 2>/dev/null ||
+	die "the tree's commit $seed is not in this repository: git fetch origin $seed"
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+files=$want what=${want::9}
+if [ -n "$work" ]; then
+	# the working tree as a tree object, staged in a copy of the index
+	index=$(git rev-parse --path-format=absolute --git-path index)
+	[ ! -f "$index" ] || cp "$index" "$tmp/index"
+	GIT_INDEX_FILE=$tmp/index git add -A
+	files=$(GIT_INDEX_FILE=$tmp/index git write-tree)
+	what="$what and the working tree"
+fi
+
+left() {
+	local x
+	for x in "${exclude[@]}"; do
+		[ "${1%%/*}" != "$x" ] || return 0
+	done
+	return 1
+}
+here() { [ -e "$root/$1" ] || [ -L "$root/$1" ]; }
+# :oldmode newmode oldid newid status NUL path NUL, files only
+raw() { git diff --raw -z --no-renames --no-abbrev "$1" "$2"; }
+
+# what changes, and the tree's edits: the hashes of what it has
+path=() om=() nm=() oid=() nid=() st=()
+while IFS= read -r -d '' meta && IFS= read -r -d '' p; do
+	left "$p" && continue
+	[[ $p != *$'\n'* ]] || die "a path with a newline: $p"
+	path+=("$p")
+	read -r a b c d e <<<"${meta#:}"
+	om+=("$a") nm+=("$b") oid+=("$c") nid+=("$d") st+=("$e")
+done < <(raw "$seed" "$files")
+if [ ${#path[@]} -eq 0 ] && [ "$seed" = "$want" ]; then
+	echo "$prog: nothing to update" >&2
+	exit 0
+fi
+declare -A cur
+for i in "${!path[@]}"; do
+	p=${path[$i]}
+	[[ ${om[$i]} == 100* ]] && [ -f "$root/$p" ] && [ ! -L "$root/$p" ] && echo "$root/$p"
+done >"$tmp/edits"
+if [ -s "$tmp/edits" ]; then
+	git hash-object --no-filters --stdin-paths <"$tmp/edits" >"$tmp/hashes"
+	while IFS= read -r p <&3 && IFS= read -r h <&4; do
+		cur[${p#"$root/"}]=$h
+	done 3<"$tmp/edits" 4<"$tmp/hashes"
+fi
+
+# check everything before writing anything
+write=() merge=() remove=() absent=() conflicts=() added=0 changed=0 removed=0
+for i in "${!path[@]}"; do
+	p=${path[$i]}
+	edited=
+	if here "$p" && [[ ${om[$i]} == 100* ]] && [ "${cur[$p]:-}" != "${oid[$i]}" ]; then
+		edited=1
+	fi
+	case ${st[$i]} in
+	D)
+		removed=$((removed + 1))
+		if [ -n "$edited" ]; then
+			conflicts+=("$p: edited in the tree, removed in $what")
+		elif here "$p"; then
+			remove+=("$p")
+		fi
+		continue ;;
+	A) added=$((added + 1)) ;;
+	*) changed=$((changed + 1)) ;;
+	esac
+	if [ "${st[$i]}" = M ] && ! here "$p"; then
+		absent+=("$p")
+	elif [[ ${nm[$i]} == 160* ]]; then
+		:	# a submodule: nothing to write
+	elif [ -n "$edited" ] && [ "${st[$i]}" = M ] && [ -z "${cur[$p]:-}" ]; then
+		conflicts+=("$p: not a file in the tree")
+	elif [ -n "$edited" ] && [ "${st[$i]}" = M ] && [ "${cur[$p]}" != "${nid[$i]}" ]; then
+		m=$tmp/merge/${#merge[@]}
+		mkdir -p "$m"
+		cp "$root/$p" "$m/tree"
+		git cat-file blob "${oid[$i]}" >"$m/seed"
+		git cat-file blob "${nid[$i]}" >"$m/new"
+		if git merge-file -L tree -L "${seed::9}" -L "$what" "$m/tree" "$m/seed" "$m/new"; then
+			[ "${nm[$i]}" = 100755 ] && chmod 775 "$m/tree" || chmod 664 "$m/tree"
+			merge+=("$p")
+		else
+			conflicts+=("$p: merge conflict")
+		fi
+	else
+		write+=("$p")
+	fi
+done
+[ ${#conflicts[@]} -eq 0 ] || die "cannot update:$(printf '\n\t%s' "${conflicts[@]}")"
+
+# each path's owner to keep, else sys, and the new directories, sys's
+for p in "${write[@]}" "${merge[@]}"; do
+	if here "$p"; then
+		printf '%s\t%s\n' "$(stat -c %u:%g "$root/$p")" "$root/$p"
+	else
+		printf '%s\t%s\n' "$sys:$sys" "$root/$p"
+	fi
+	d=$(dirname "$p")
+	while [ "$d" != . ] && [ ! -d "$root/$d" ]; do
+		printf '%s\t%s\n' "$sys:$sys" "$root/$d"
+		d=$(dirname "$d")
+	done
+done | sort -u >"$tmp/owners"
+
+[ ${#remove[@]} -eq 0 ] || printf "$root/%s\0" "${remove[@]}" | xargs -0 rm -rf
+umask 002
+if [ ${#write[@]} -gt 0 ]; then
+	GIT_INDEX_FILE=$tmp/write git read-tree "$files"
+	printf '%s\0' "${write[@]}" |
+		GIT_INDEX_FILE=$tmp/write git checkout-index -f -z --stdin --prefix="$root/"
+fi
+for i in "${!merge[@]}"; do
+	mv -f "$tmp/merge/$i/tree" "$root/${merge[$i]}"
+done
+if [ -n "$owner" ]; then
+	cut -f1 "$tmp/owners" | sort -u | while read -r o; do
+		awk -v o="$o" 'substr($0, 1, length(o) + 1) == o "\t" { print substr($0, length(o) + 2) }' "$tmp/owners" |
+			tr '\n' '\0' | xargs -0 chown -h "$o"
+	done
+fi
+
+# the repository: the objects, front, and git/branch's INDEX9 lines
+put() {
+	# a new file, with the old one's owner
+	cat >"$1.sync"
+	chmod 664 "$1.sync"
+	[ -z "$owner" ] || chown "$(stat -c %u:%g "$1")" "$1.sync"
+	mv -f "$1.sync" "$1"
+}
+if [ "$seed" != "$want" ]; then
+	git rev-list --objects "$seed..$want" | git pack-objects -q --stdout >"$tmp/p.pack"
+	name=$(git index-pack "$tmp/p.pack" | sed 's/^pack\t//')
+	for x in pack idx; do
+		# named as 9front's git names them: no pack- prefix
+		f=$repo/objects/pack/$name.$x
+		cp "$tmp/p.$x" "$f"
+		chmod 664 "$f"
+		[ -z "$owner" ] || chown "$sys:$sys" "$f"
+	done
+	{
+		cat "$repo/INDEX9"
+		raw "$seed" "$want" | while IFS= read -r -d '' meta && IFS= read -r -d '' p; do
+			case $meta in
+			*' D') echo "R NOQID 0 $p" ;;
+			*) echo "T NOQID 0 $p" ;;
+			esac
+		done
+	} | put "$repo/INDEX9"
+	echo "$want" | put "$repo/refs/heads/front"
+fi
+
+# the directories every objtype's builds install into, as sys
+stub='umask 002; cd "$1" && . sys/lib/rootstub'
+if [ -n "$owner" ]; then
+	chroot --userspec=$sys:$sys --skip-chdir / sh -c "$stub" sh "$root"
+else
+	sh -c "$stub" sh "$root"
+fi
+
+echo "$prog: ${seed::9}..$what: $added added, $changed changed, $removed removed, ${#merge[@]} merged" >&2
+for p in "${merge[@]}"; do
+	echo "$prog: merged: $p" >&2
+done
+for p in "${absent[@]}"; do
+	echo "$prog: not in the tree, left out: $p" >&2
+done
