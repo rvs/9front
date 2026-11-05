@@ -79,6 +79,14 @@ all)      cmd="rc $rc/build $objtype && rc $rc/kernel $conf" ;;
 esac
 [ "$what" = userland ] || [ -n "$conf" ] || { echo "$prog: no kernel for $objtype: -c or userland" >&2; exit 2; }
 boot=$(cd "$(dirname "$0")" && pwd)
+# as sys, when root
+assys() {
+	if [ "$(id -u)" = 0 ]; then
+		chroot --userspec=110000:110000 --skip-chdir / "$@"
+	else
+		"$@"
+	fi
+}
 
 if [ -z "$root" ]; then
 	image=${IMAGE:-$(awk -v a="$objtype" '$1 == a { print $2 }' "$boot/images")}
@@ -125,8 +133,8 @@ cp "$kernel" "$tmp/9pc64cpuwait"
 
 # as sys, so that what the build makes in the tree is sys's, like
 # the rest of it
-"$boot/docker/assys" env CPU=127.0.0.1 "PORT=$(cat "$tmp/port")" "ROOT=$root" "PASS=${PASS:-glen||glenda}" \
-	python3 "$boot/docker/9front" drawterm -G -c "$cmd" </dev/null 2>&1 | tee "$tmp/log" || die "$what build failed"
+assys env CPU=127.0.0.1 "PORT=$(cat "$tmp/port")" "ROOT=$root" "PASS=${PASS:-glen||glenda}" \
+	"$boot/docker/9front" drawterm -G -c "$cmd" </dev/null 2>&1 | tee "$tmp/log" || die "$what build failed"
 ! tr -d '\r' <"$tmp/log" | grep -E '^mk: .*(exit status|know how|no recipe)|^bad include|^(merge|cp) failed' >&2 ||
 	die "$what build failed"
 

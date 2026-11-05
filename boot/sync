@@ -1,214 +1,222 @@
-#!/usr/bin/env python3
-"""usage: boot/sync [-w] [-x path]... root
+#!/bin/bash
+# Update a 9front tree to this checkout:
+#
+#	boot/sync [-w] [-x path]... root
+#
+# brings the tree root (a 9front-fs image's /9front) from its commit
+# (its dist/9front/.git/refs/heads/front), which must be in this
+# repository, to HEAD, as 9front's git/pull and git/branch would, but
+# with this host's git, in seconds.  With -w, the files are the
+# working tree's (tracked and untracked but not ignored), and the
+# tree's repository still moves to HEAD, so 9front's git/diff shows
+# the difference.
+#
+# - only the files that differ are written, with git's modes as 664
+#   or 775 and the time now; new files and directories belong to sys,
+#   changed files keep their owners;
+# - files edited in the tree get a three-way merge (git merge-file);
+#   a conflict, or a file edited in the tree but removed here, fails;
+#   files changed here but absent from the tree stay absent;
+# - removed files are removed;
+# - the tree's repository moves to HEAD: a pack of the new objects,
+#   refs/heads/front, and INDEX9 lines, as git/branch writes them;
+# - /sys/lib/rootstub makes the directories every objtype installs
+#   into.
+#
+# The top-level paths boot, .github and AGENTS.md, this host's, and
+# any named with -x are left out of the tree, but not of its
+# repository.  Owners change only when run as root.
+set -euo pipefail
+prog=boot/sync
+usage() { echo "usage: $prog [-w] [-x path]... root" >&2; exit 2; }
+die() { echo "$prog: $*" >&2; exit 1; }
+sys=110000
+work= exclude=(boot .github AGENTS.md)
+while getopts 'wx:' opt; do
+	case $opt in
+	w) work=1 ;;
+	x) exclude+=("$OPTARG") ;;
+	*) usage ;;
+	esac
+done
+shift $((OPTIND - 1))
+[ $# -eq 1 ] || usage
+root=$(realpath "$1")
+src=$(cd "$(dirname "$0")/.." && pwd)
+git() { command git -C "$src" "$@"; }
+repo=$root/dist/9front/.git
+owner=
+[ "$(id -u)" = 0 ] && owner=1
 
-Update the 9front tree root (a 9front-fs image's /9front) to this
-checkout's HEAD, from the tree's commit (its
-dist/9front/.git/refs/heads/front), which must be in this repository,
-as 9front's git/pull and git/branch would, but with the host's git,
-in seconds.  With -w, the files are the working tree's (tracked and
-untracked but not ignored), and the tree's repository still moves
-to HEAD, so 9front's git/diff shows the difference.
+seed=$(cat "$repo/refs/heads/front" 2>/dev/null) || die "$root: no 9front tree"
+want=$(git rev-parse HEAD)
+git cat-file -e "$seed^{commit}" 2>/dev/null ||
+	die "the tree's commit $seed is not in this repository: git fetch origin $seed"
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+files=$want what=${want::9}
+if [ -n "$work" ]; then
+	# the working tree as a tree object, staged in a copy of the index
+	index=$(git rev-parse --path-format=absolute --git-path index)
+	[ ! -f "$index" ] || cp "$index" "$tmp/index"
+	GIT_INDEX_FILE=$tmp/index git add -A
+	files=$(GIT_INDEX_FILE=$tmp/index git write-tree)
+	what="$what and the working tree"
+fi
 
-- only the files that differ are written, with git's modes as 664 or
-  775 and the time now; new files and directories belong to sys,
-  changed files keep their owners;
-- files edited in the tree get a three-way merge (git merge-file);
-  a conflict, or a file edited in the tree but removed here, fails;
-  files changed here but absent from the tree stay absent;
-- removed files are removed;
-- the tree's repository moves to HEAD: a pack of the new objects,
-  refs/heads/front, and INDEX9 lines, as git/branch writes them;
-- /sys/lib/rootstub makes the directories every objtype installs into.
+left() {
+	local x
+	for x in "${exclude[@]}"; do
+		[ "${1%%/*}" != "$x" ] || return 0
+	done
+	return 1
+}
+here() { [ -e "$root/$1" ] || [ -L "$root/$1" ]; }
+# :oldmode newmode oldid newid status NUL path NUL, files only
+raw() { git diff --raw -z --no-renames --no-abbrev "$1" "$2"; }
 
-The top-level paths boot, .github and AGENTS.md, this host's, and
-any named with -x are left out of the tree, but not of its repository.
-"""
-import getopt, hashlib, os, shutil, stat, subprocess, sys, tempfile
+# what changes, and the tree's edits: the hashes of what it has
+path=() om=() nm=() oid=() nid=() st=()
+while IFS= read -r -d '' meta && IFS= read -r -d '' p; do
+	left "$p" && continue
+	[[ $p != *$'\n'* ]] || die "a path with a newline: $p"
+	path+=("$p")
+	read -r a b c d e <<<"${meta#:}"
+	om+=("$a") nm+=("$b") oid+=("$c") nid+=("$d") st+=("$e")
+done < <(raw "$seed" "$files")
+if [ ${#path[@]} -eq 0 ] && [ "$seed" = "$want" ]; then
+	echo "$prog: nothing to update" >&2
+	exit 0
+fi
+declare -A cur
+for i in "${!path[@]}"; do
+	p=${path[$i]}
+	[[ ${om[$i]} == 100* ]] && [ -f "$root/$p" ] && [ ! -L "$root/$p" ] && echo "$root/$p"
+done >"$tmp/edits"
+if [ -s "$tmp/edits" ]; then
+	git hash-object --no-filters --stdin-paths <"$tmp/edits" >"$tmp/hashes"
+	while IFS= read -r p <&3 && IFS= read -r h <&4; do
+		cur[${p#"$root/"}]=$h
+	done 3<"$tmp/edits" 4<"$tmp/hashes"
+fi
 
-SYS = 110000
-EXCLUDE = ['boot', '.github', 'AGENTS.md']
-GIT = 'dist/9front/.git'
+# check everything before writing anything
+write=() merge=() remove=() absent=() conflicts=() added=0 changed=0 removed=0
+for i in "${!path[@]}"; do
+	p=${path[$i]}
+	edited=
+	if here "$p" && [[ ${om[$i]} == 100* ]] && [ "${cur[$p]:-}" != "${oid[$i]}" ]; then
+		edited=1
+	fi
+	case ${st[$i]} in
+	D)
+		removed=$((removed + 1))
+		if [ -n "$edited" ]; then
+			conflicts+=("$p: edited in the tree, removed in $what")
+		elif here "$p"; then
+			remove+=("$p")
+		fi
+		continue ;;
+	A) added=$((added + 1)) ;;
+	*) changed=$((changed + 1)) ;;
+	esac
+	if [ "${st[$i]}" = M ] && ! here "$p"; then
+		absent+=("$p")
+	elif [[ ${nm[$i]} == 160* ]]; then
+		:	# a submodule: nothing to write
+	elif [ -n "$edited" ] && [ "${st[$i]}" = M ] && [ -z "${cur[$p]:-}" ]; then
+		conflicts+=("$p: not a file in the tree")
+	elif [ -n "$edited" ] && [ "${st[$i]}" = M ] && [ "${cur[$p]}" != "${nid[$i]}" ]; then
+		m=$tmp/merge/${#merge[@]}
+		mkdir -p "$m"
+		cp "$root/$p" "$m/tree"
+		git cat-file blob "${oid[$i]}" >"$m/seed"
+		git cat-file blob "${nid[$i]}" >"$m/new"
+		if git merge-file -L tree -L "${seed::9}" -L "$what" "$m/tree" "$m/seed" "$m/new"; then
+			[ "${nm[$i]}" = 100755 ] && chmod 775 "$m/tree" || chmod 664 "$m/tree"
+			merge+=("$p")
+		else
+			conflicts+=("$p: merge conflict")
+		fi
+	else
+		write+=("$p")
+	fi
+done
+[ ${#conflicts[@]} -eq 0 ] || die "cannot update:$(printf '\n\t%s' "${conflicts[@]}")"
 
+# each path's owner to keep, else sys, and the new directories, sys's
+for p in "${write[@]}" "${merge[@]}"; do
+	if here "$p"; then
+		printf '%s\t%s\n' "$(stat -c %u:%g "$root/$p")" "$root/$p"
+	else
+		printf '%s\t%s\n' "$sys:$sys" "$root/$p"
+	fi
+	d=$(dirname "$p")
+	while [ "$d" != . ] && [ ! -d "$root/$d" ]; do
+		printf '%s\t%s\n' "$sys:$sys" "$root/$d"
+		d=$(dirname "$d")
+	done
+done | sort -u >"$tmp/owners"
 
-def die(msg):
-    sys.exit('boot/sync: ' + msg)
+[ ${#remove[@]} -eq 0 ] || printf "$root/%s\0" "${remove[@]}" | xargs -0 rm -rf
+umask 002
+if [ ${#write[@]} -gt 0 ]; then
+	GIT_INDEX_FILE=$tmp/write git read-tree "$files"
+	printf '%s\0' "${write[@]}" |
+		GIT_INDEX_FILE=$tmp/write git checkout-index -f -z --stdin --prefix="$root/"
+fi
+for i in "${!merge[@]}"; do
+	mv -f "$tmp/merge/$i/tree" "$root/${merge[$i]}"
+done
+if [ -n "$owner" ]; then
+	cut -f1 "$tmp/owners" | sort -u | while read -r o; do
+		awk -v o="$o" 'substr($0, 1, length(o) + 1) == o "\t" { print substr($0, length(o) + 2) }' "$tmp/owners" |
+			tr '\n' '\0' | xargs -0 chown -h "$o"
+	done
+fi
 
+# the repository: the objects, front, and git/branch's INDEX9 lines
+put() {
+	# a new file, with the old one's owner
+	cat >"$1.sync"
+	chmod 664 "$1.sync"
+	[ -z "$owner" ] || chown "$(stat -c %u:%g "$1")" "$1.sync"
+	mv -f "$1.sync" "$1"
+}
+if [ "$seed" != "$want" ]; then
+	git rev-list --objects "$seed..$want" | git pack-objects -q --stdout >"$tmp/p.pack"
+	name=$(git index-pack "$tmp/p.pack" | sed 's/^pack\t//')
+	for x in pack idx; do
+		# named as 9front's git names them: no pack- prefix
+		f=$repo/objects/pack/$name.$x
+		cp "$tmp/p.$x" "$f"
+		chmod 664 "$f"
+		[ -z "$owner" ] || chown "$sys:$sys" "$f"
+	done
+	{
+		cat "$repo/INDEX9"
+		raw "$seed" "$want" | while IFS= read -r -d '' meta && IFS= read -r -d '' p; do
+			case $meta in
+			*' D') echo "R NOQID 0 $p" ;;
+			*) echo "T NOQID 0 $p" ;;
+			esac
+		done
+	} | put "$repo/INDEX9"
+	echo "$want" | put "$repo/refs/heads/front"
+fi
 
-def run(*cmd, input=None, check=True, **kw):
-    r = subprocess.run(cmd, input=input, stdout=subprocess.PIPE, **kw)
-    if check and r.returncode:
-        die(f'{cmd[0]} {cmd[1]} failed')
-    return r
+# the directories every objtype's builds install into, as sys
+stub='umask 002; cd "$1" && . sys/lib/rootstub'
+if [ -n "$owner" ]; then
+	chroot --userspec=$sys:$sys --skip-chdir / sh -c "$stub" sh "$root"
+else
+	sh -c "$stub" sh "$root"
+fi
 
-
-def diff(git, a, b):
-    # :OLDMODE NEWMODE OLDID NEWID STATUS\0PATH\0, for files only
-    raw = git('diff', '--raw', '-z', '--no-renames', '--no-abbrev', a, b).split(b'\0')
-    changes = []
-    for meta, p in zip(raw[0::2], raw[1::2]):
-        om, nm, oid, nid, st = meta.decode()[1:].split()
-        changes.append((os.fsdecode(p), om, nm, oid, nid, st))
-    return changes
-
-
-def worktree(git, src):
-    # the working tree as a tree object, staged in a copy of the index
-    with tempfile.TemporaryDirectory() as td:
-        index = git('rev-parse', '--path-format=absolute', '--git-path', 'index').decode().strip()
-        if os.path.exists(index):
-            shutil.copyfile(index, f'{td}/index')
-        env = dict(os.environ, GIT_INDEX_FILE=f'{td}/index')
-        run('git', '-C', src, 'add', '-A', env=env)
-        return run('git', '-C', src, 'write-tree', env=env).stdout.decode().strip()
-
-
-def main(root, work, exclude):
-    src = os.path.dirname(os.path.dirname(os.path.realpath(__file__)))
-    git = lambda *a, **k: run('git', '-C', src, *a, **k).stdout
-    fmt = git('rev-parse', '--show-object-format').decode().strip()
-    blobid = lambda d: hashlib.new(fmt, b'blob %d\0' % len(d) + d).hexdigest()
-    owner = os.geteuid() == 0
-    at = lambda p: os.path.join(root, p)
-
-    def chown(p, uid, gid):
-        if owner:
-            os.lchown(p, uid, gid)
-
-    def write(p, data, mode, link=None):
-        # a new inode, then the old one's owner, else sys's
-        old = os.lstat(at(p)) if os.path.lexists(at(p)) else None
-        tmp = at(p) + '.sync'
-        if link is not None:
-            os.symlink(link, tmp)
-        else:
-            with open(tmp, 'wb') as f:
-                f.write(data)
-            os.chmod(tmp, mode)
-        chown(tmp, old.st_uid if old else SYS, old.st_gid if old else SYS)
-        os.replace(tmp, at(p))
-
-    try:
-        seed = open(at(GIT + '/refs/heads/front')).read().strip()
-    except OSError:
-        die(f'{root}: no 9front tree')
-    want = git('rev-parse', 'HEAD').decode().strip()
-    if run('git', '-C', src, 'cat-file', '-e', seed + '^{commit}', check=False).returncode:
-        die(f'the tree\'s commit {seed} is not in this repository: git fetch origin {seed}')
-    files = worktree(git, src) if work else want
-    changes = diff(git, seed, want)
-    left = lambda p: p.split('/')[0] in exclude
-    tree = [c for c in diff(git, seed, files) if not left(c[0])]
-    if not tree and not changes:
-        print('boot/sync: nothing to update', file=sys.stderr)
-        return
-    what = want[:9] + (' and the working tree' if work else '')
-
-    def read(p):
-        try:
-            st = os.lstat(at(p))
-        except FileNotFoundError:
-            return None, None
-        if stat.S_ISREG(st.st_mode):
-            return st, open(at(p), 'rb').read()
-        return st, None
-
-    # check everything before writing anything
-    plan, merged, absent, conflicts = [], [], [], []
-    for p, om, nm, oid, nid, st in tree:
-        h, cur = read(p)
-        edited = h is not None and om.startswith('100') and (cur is None or blobid(cur) != oid)
-        if st == 'D':
-            if edited:
-                conflicts.append(p + ': edited in the tree, removed in ' + what)
-            elif h is not None:
-                plan.append((p, None, None))
-            continue
-        if st == 'M' and h is None:
-            absent.append(p)
-            continue
-        if nm.startswith('160'):                # a submodule: nothing to write
-            continue
-        data = git('cat-file', 'blob', nid)
-        if edited and st == 'M' and blobid(cur) != nid:
-            with tempfile.TemporaryDirectory() as td:
-                for n, d in ('tree', cur), ('seed', git('cat-file', 'blob', oid)), ('new', data):
-                    open(f'{td}/{n}', 'wb').write(d)
-                r = run('git', 'merge-file', '-p', '-L', 'tree', '-L', seed[:9], '-L', what,
-                        f'{td}/tree', f'{td}/seed', f'{td}/new', check=False)
-            if r.returncode:
-                conflicts.append(p + ': merge conflict')
-                continue
-            data = r.stdout
-            merged.append(p)
-        plan.append((p, nm, data))
-    if conflicts:
-        die('cannot update:\n\t' + '\n\t'.join(conflicts))
-
-    for p, nm, data in plan:
-        if nm is None or (os.path.lexists(at(p)) and not os.path.islink(at(p)) and os.path.isdir(at(p))):
-            if os.path.isdir(at(p)) and not os.path.islink(at(p)):
-                shutil.rmtree(at(p))
-            elif os.path.lexists(at(p)):
-                os.remove(at(p))
-        if nm is None:
-            continue
-        d = os.path.dirname(p)
-        missing = []
-        while d and not os.path.isdir(at(d)):
-            missing.append(d)
-            d = os.path.dirname(d)
-        for d in reversed(missing):
-            if os.path.lexists(at(d)):
-                os.remove(at(d))
-            os.mkdir(at(d), 0o775)
-            os.chmod(at(d), 0o775)
-            chown(at(d), SYS, SYS)
-        if nm == '120000':
-            if os.path.lexists(at(p)):
-                os.remove(at(p))
-            write(p, None, None, link=os.fsdecode(data))
-        else:
-            write(p, data, 0o775 if nm == '100755' else 0o664)
-
-    # the repository: the objects, front, and git/branch's INDEX9 lines
-    if changes:
-        pack = at(GIT + '/objects/pack')
-        objs = git('rev-list', '--objects', f'{seed}..{want}')
-        with tempfile.TemporaryDirectory() as td:
-            name = run('git', '-C', src, 'pack-objects', '-q', f'{td}/p', input=objs).stdout.decode().strip()
-            for ext in 'pack', 'idx':
-                # named as 9front's git names them: no pack- prefix
-                shutil.copyfile(f'{td}/p-{name}.{ext}', f'{pack}/{name}.{ext}')
-                os.chmod(f'{pack}/{name}.{ext}', 0o664)
-                chown(f'{pack}/{name}.{ext}', SYS, SYS)
-        index = open(at(GIT + '/INDEX9'), 'rb').read() + b''.join(
-            b'%s NOQID 0 %s\n' % (b'R' if c[5] == 'D' else b'T', os.fsencode(c[0])) for c in changes)
-        write(GIT + '/INDEX9', index, 0o664)
-        write(GIT + '/refs/heads/front', want.encode() + b'\n', 0o664)
-
-    # the directories every objtype's builds install into, as sys
-    def assys():
-        os.umask(0o002)
-        if owner:
-            os.setgroups([])
-            os.setgid(SYS)
-            os.setuid(SYS)
-    run('sh', '-c', '. sys/lib/rootstub', cwd=root, preexec_fn=assys)
-
-    n = lambda s: sum(1 for c in tree if c[5] == s)
-    print(f'boot/sync: {seed[:9]}..{what}: {n("A")} added, {n("M") + n("T")} changed, '
-          f'{n("D")} removed, {len(merged)} merged', file=sys.stderr)
-    for p in merged:
-        print('boot/sync: merged:', p, file=sys.stderr)
-    for p in absent:
-        print('boot/sync: not in the tree, left out:', p, file=sys.stderr)
-
-
-if __name__ == '__main__':
-    try:
-        opts, args = getopt.getopt(sys.argv[1:], 'wx:')
-    except getopt.GetoptError:
-        args = []
-    if len(args) != 1:
-        sys.exit(__doc__.split('\n\n')[0])
-    main(os.path.realpath(args[0]), ('-w', '') in opts, EXCLUDE + [v for o, v in opts if o == '-x'])
+echo "$prog: ${seed::9}..$what: $added added, $changed changed, $removed removed, ${#merge[@]} merged" >&2
+for p in "${merge[@]}"; do
+	echo "$prog: merged: $p" >&2
+done
+for p in "${absent[@]}"; do
+	echo "$prog: not in the tree, left out: $p" >&2
+done

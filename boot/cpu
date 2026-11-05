@@ -50,7 +50,15 @@ if [ -z "$objtype" ]; then
 	*) die "$kernel: which objtype? -a" ;;
 	esac
 fi
-[ -n "$port" ] || port=$(python3 -c 'import socket; s=socket.socket(); s.bind(("", 0)); print(s.getsockname()[1])')
+if [ -z "$port" ]; then
+	# one in the dynamic range that nothing listens on
+	used=" $(awk '$4 == "0A" { sub(/.*:/, "", $2); print $2 }' /proc/net/tcp /proc/net/tcp6 2>/dev/null |
+		while read -r h; do printf '%d ' "0x$h"; done)"
+	for i in $(seq 100); do
+		port=$((49152 + RANDOM % 16384))
+		[[ $used == *" $port "* ]] || break
+	done
+fi
 
 nvram=${nvram:-$boot/docker/cpu.nvram}
 [ -f "$nvram" ] || die "no nvram $nvram"

@@ -81,7 +81,7 @@ LABEL org.opencontainers.image.title="9front $OBJTYPE" \
       org.opencontainers.image.revision=$REVISION \
       org.opencontainers.image.source=$SOURCE
 # the Linux drawterms are glibc binaries (libc, libm, libz only)
-RUN apk add --no-cache python3 socat gcompat zlib
+RUN apk add --no-cache socat gcompat zlib
 # the Linux names of the tree's Plan 9 owners, which u9fs serves
 COPY boot/docker/passwd boot/docker/group /etc/
 # --parents: /9front keeps its own owner and mode, not just its contents

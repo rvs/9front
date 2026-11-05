@@ -51,6 +51,14 @@ if [ -z "$objtype" ]; then
 	esac
 fi
 boot=$(cd "$(dirname "$0")" && pwd)
+# as sys, when root
+assys() {
+	if [ "$(id -u)" = 0 ]; then
+		chroot --userspec=110000:110000 --skip-chdir / "$@"
+	else
+		"$@"
+	fi
+}
 pass=${PASS:-glen||glenda}
 tmp=$(mktemp -d)
 
@@ -97,7 +105,7 @@ if [ -n "$tar" ]; then
 fi
 [ -x "$root/$objtype/bin/rc" ] || die "no /$objtype/bin/rc in the tree: tar"
 # not in /tmp: drawterm covers the root's /tmp with its own
-"$boot/docker/assys" sh -c "cat >'$root/sys/lib/boot-test.rc'" <<'EOF'
+assys sh -c "umask 002; cat >'$root/sys/lib/boot-test.rc'" <<'EOF'
 rfork e
 fn fail { echo boot-test: FAIL $* >[1=2]; exit fail }
 u=`{cat /dev/user}
@@ -121,8 +129,8 @@ EOF
 port=$(cat "$tmp/port")
 
 dt() {
-	"$boot/docker/assys" env CPU=127.0.0.1 "PORT=$port" "ROOT=$root" "PASS=$1" \
-		python3 "$boot/docker/9front" drawterm -G -c "$2" </dev/null 2>&1 | tr -d '\r'
+	assys env CPU=127.0.0.1 "PORT=$port" "ROOT=$root" "PASS=$1" \
+		"$boot/docker/9front" drawterm -G -c "$2" </dev/null 2>&1 | tr -d '\r'
 }
 dt "$pass" "rc /sys/lib/boot-test.rc $objtype" | tee "$tmp/log" || die "login or native failed"
 grep -q '^boot-test: ok native' "$tmp/log" || die "login or native failed"
