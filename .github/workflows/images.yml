@@ -1,0 +1,95 @@
+# Build and push the 9front-OBJTYPE images of this commit, one job for
+# each objtype in parallel: boot/rebuild -t, a tree rebuilt from this
+# commit on the objtype's pinned image (boot/images), userland and
+# kernel (power and power64: userland only), with KVM.
+#
+# Each image is pushed as REGISTRY/9front-OBJTYPE (REGISTRY: the
+# repository variable, default ghcr.io/OWNER), tagged with the
+# commit's first 12 hex digits, and on et also latest.  The login is
+# GHCR_TOKEN if the repository has that secret, else GITHUB_TOKEN,
+# which can write only packages that grant this repository access.
+#
+# A new image is a new seed only once boot/images pins it.
+name: 9front images
+
+on:
+  push:
+  workflow_dispatch:
+    inputs:
+      arches:
+        description: objtypes, separated by spaces
+        default: 386 amd64 arm arm64 mips power power64 riscv64 spim
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: images-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  arches:
+    runs-on: ubuntu-24.04
+    outputs:
+      arches: ${{ steps.arches.outputs.arches }}
+    steps:
+      - id: arches
+        env:
+          ARCHES: ${{ inputs.arches || '386 amd64 arm arm64 mips power power64 riscv64 spim' }}
+        run: echo "arches=$(jq -cn --arg a "$ARCHES" '$a | split(" ") | map(select(. != ""))')" >>"$GITHUB_OUTPUT"
+
+  image:
+    needs: arches
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: ${{ fromJSON(needs.arches.outputs.arches) }}
+    env:
+      ARCH: ${{ matrix.arch }}
+      REGISTRY: ${{ vars.REGISTRY || format('ghcr.io/{0}', github.repository_owner) }}
+    steps:
+      # all of its history: boot/sync updates the image's tree from its
+      # commit
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      # qemu runs as root in the builder's container: /dev/kvm need
+      # only be there
+      - name: KVM
+        run: test -c /dev/kvm
+
+      # a builder whose RUNs may have /dev/kvm
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+        with:
+          buildkitd-flags: --allow-insecure-entitlement security.insecure
+
+      - uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GHCR_TOKEN || secrets.GITHUB_TOKEN }}
+
+      - name: Build 9front-${{ matrix.arch }}
+        env:
+          SOURCE: ${{ github.server_url }}/${{ github.repository }}
+        run: |
+          what=all
+          case $ARCH in power|power64) what=userland ;; esac
+          boot/rebuild -a "$ARCH" -t "9front-$ARCH:build" $what
+
+      - name: Push
+        env:
+          BRANCH: ${{ github.ref_name }}
+        run: |
+          image=${REGISTRY,,}/9front-$ARCH
+          tags=("${GITHUB_SHA::12}")
+          [ "$BRANCH" = et ] && tags+=(latest)
+          for t in "${tags[@]}"; do
+            docker tag "9front-$ARCH:build" "$image:$t"
+          done
+          docker push --all-tags "$image"
