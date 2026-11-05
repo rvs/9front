@@ -22,18 +22,19 @@
 # for userland, 9front.objtype.tar, a tar of 9front/objtype and
 # 9front/acme/bin/objtype with the Plan 9 owners (amd64: all of
 # 9front); for kernel, 9conf, and 9conf.u, s9conf or 9conf.gz if the
-# mkfile makes them; for all, both.  With -t, it makes the image tag instead.  qemu
+# mkfile makes them; for all, both.  With -t, it makes the image tag
+# instead, labelled with HEAD and SOURCE, its repository's URL.  qemu
 # uses KVM when the builder grants security.insecure (ACCEL=kvm), else
 # TCG (ACCEL=tcg), much slower.
 #
 # In a container that has the tree, qemu and drawterm, as the
 # Dockerfile's, -r root builds there, in the tree root, and writes to
-# dir, or with dir -, nowhere.  The machine's kernel is KERNEL, else the tree's
-# amd64/9pc64cpuwait, else /boot/9pc64cpuwait; its nvram
+# dir, or with dir -, nowhere.  The machine's kernel is KERNEL, else
+# the tree's amd64/9pc64cpuwait, else /boot/9pc64cpuwait; its nvram
 # boot/docker/cpu.nvram.
 #
-# Environment: IMAGE, ACCEL, KERNEL (above), PASS (glen||glenda), MEM
-# and SMP (boot/cpu's).
+# Environment: IMAGE, ACCEL, SOURCE, KERNEL (above), PASS (glen||glenda),
+# MEM and SMP (boot/cpu's).
 set -euo pipefail
 prog=boot/rebuild
 usage() { echo "usage: $prog [-a objtype] [-c conf] [-w] [-t tag | -r root] userland|kernel|all [dir]" >&2; exit 2; }
@@ -91,7 +92,8 @@ if [ -z "$root" ]; then
 	[ "$ACCEL" = kvm ] && args+=(--allow security.insecure)
 	for v in MEM SMP; do [ -z "${!v:-}" ] || args+=(--build-arg "$v=${!v}"); done
 	if [ -n "$tag" ]; then
-		args+=(--target image --build-arg OUT=- -t "$tag" --load)
+		args+=(--target image --build-arg OUT=- -t "$tag" --load
+			--build-arg "REVISION=$(git -C "$boot" rev-parse HEAD)" --build-arg "SOURCE=${SOURCE:-}")
 	else
 		mkdir -p "$out"
 		args+=(--target out --output "type=local,dest=$out")

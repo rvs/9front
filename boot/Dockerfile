@@ -75,6 +75,11 @@ RUN --mount=from=kernel,target=/kernel \
 FROM test-${ACCEL} AS test
 
 FROM ${ALPINE} AS image
+ARG OBJTYPE=amd64 REVISION SOURCE
+LABEL org.opencontainers.image.title="9front $OBJTYPE" \
+      org.opencontainers.image.description="9front's $OBJTYPE userland and kernel, built from $SOURCE $REVISION, served over 9P by u9fs" \
+      org.opencontainers.image.revision=$REVISION \
+      org.opencontainers.image.source=$SOURCE
 # the Linux drawterms are glibc binaries (libc, libm, libz only)
 RUN apk add --no-cache python3 socat gcompat zlib
 # the Linux names of the tree's Plan 9 owners, which u9fs serves
