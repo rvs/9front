@@ -29,12 +29,16 @@ RUN for p in ../*.patch; do patch -p1 -F0 <"$p" || exit; done \
 # SHA256SUMS names the release's tarballs; ADD refetches it every build.
 FROM ${ALPINE} AS drawterm
 ARG DRAWTERM=https://github.com/rvs/drawterm/releases/latest/download
-ADD --chmod=644 ${DRAWTERM}/SHA256SUMS /src/
+ARG TARGETARCH
+ADD --chmod=644 ${DRAWTERM}/SHA256SUMS /src/all.sums
 WORKDIR /src
-RUN for t in $(awk '{print $2}' SHA256SUMS); do wget -q "$DRAWTERM/$t" || exit; done \
+# only the image's own, linux-TARGETARCH, as drawterm
+RUN grep -E "  drawterm-kitty-[^ ]*-linux-$TARGETARCH\.tar\.gz\$" all.sums >SHA256SUMS \
+ && [ "$(wc -l <SHA256SUMS)" -eq 1 ] || { echo "no linux-$TARGETARCH drawterm" >&2; exit 1; } \
+ && for t in $(awk '{print $2}' SHA256SUMS); do wget -q "$DRAWTERM/$t" || exit; done \
  && sha256sum -c SHA256SUMS && mkdir -p /out/bin /out/share/doc/drawterm \
  && for t in *.tar.gz; do d=${t%.tar.gz}; tar xozf "$t" \
-	&& mv "$d/drawterm" "/out/bin/drawterm.${d#drawterm-kitty-*-}" || exit; done \
+	&& mv "$d/drawterm" /out/bin/drawterm || exit; done \
  && mv "$d"/* SHA256SUMS /out/share/doc/drawterm/
 
 # the last tree, with its drawterm and the kernel of the machine that

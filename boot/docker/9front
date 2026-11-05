@@ -29,7 +29,7 @@ drawterm:  CPU (found: 127.0.0.1, host.docker.internal, the default gateway),
            PORT (17019), AUTH (tcp!127.0.0.1!567: none, so drawterm makes the
            tickets and DTUSER must be the cpu server's host owner),
            DTUSER (glenda), ROOT (/9front), WAIT (60 s; 0: don't),
-           PASS (else asked on the tty: -it), DRAWTERM (drawterm.linux-ARCH)
+           PASS (else asked on the tty: -it), DRAWTERM (/usr/local/bin/drawterm)
 qemu:      -cpu: the cpuwait kernel, /9front's or /boot's 9pc64cpuwait, with
            /boot/cpu.nvram; rcpu on port PORT (17019), so publish it
            (-p 17019:17019) or drawterm from this container
@@ -247,12 +247,10 @@ findcpu() {
 }
 
 drawterm() {
-	case $(uname -m) in
-	x86_64) arch=amd64 ;;
-	aarch64) arch=arm64 ;;
-	*) die "no drawterm for $(uname -m)" ;;
-	esac
-	get DRAWTERM "/usr/local/bin/drawterm.linux-$arch"; dt=$v
+	# older images have drawterm.linux-amd64
+	dt=/usr/local/bin/drawterm
+	[ -x "$dt" ] || dt=/usr/local/bin/drawterm.linux-amd64
+	get DRAWTERM "$dt"; dt=$v
 	get CPU ''; cpu=$v
 	get PORT 17019 '[0-9]{1,5}'; port=$(decimal "$v")
 	get WAIT 60 '[0-9]+(\.[0-9]*)?'; wait=$v
