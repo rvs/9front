@@ -1,6 +1,7 @@
 #!/bin/sh
-# 9front-fs: serve /9front over 9P, hand its kernel to the host, or
-# drawterm to a cpuwait cpu server with /9front as the session's root.
+# 9front-fs: serve /9front over 9P, hand its kernel to the host, boot
+# a kernel in qemu (yours: none here), drawterm to a cpuwait cpu server
+# with /9front as the session's root, or a shell.
 ROOT=/9front
 KERNEL=$ROOT/amd64/9pc64
 HEALTHCHECK=/usr/local/bin/9p-healthcheck
@@ -13,17 +14,36 @@ help() {
 usage: 9front [command]
   serve               serve /9front over 9P2000 on tcp!*!564 (the default)
   drawterm [options]  rcpu to a cpuwait cpu server, exporting /9front as root
+  qemu [options] [kernel]
+                      boot a kernel in qemu, which you install (apk add
+                      qemu-system-x86_64): with /9front as its root over
+                      virtio-9p, or with -cpu, as a cpuwait cpu server
+  shell [args]        /bin/sh in the container (interactive: docker run -it)
   kernel              write the amd64 kernel, 9pc64, to standard output
   agents.md           how to boot that kernel with QEMU on the host
   info --json         this image's metadata and settings
 serve:     READ_ONLY (1; 0: experimental writable export)
 agents.md: NINEFRONT_IMAGE (9front-fs), NINEFRONT_HOST_PORT (9564),
            NINEFRONT_KERNEL_PATH (/tmp/kernel), NINEFRONT_QUIET (0; 1: no banner)
-drawterm:  CPU (found: host.docker.internal, then the default gateway),
+drawterm:  CPU (found: 127.0.0.1, host.docker.internal, the default gateway),
            PORT (17019), AUTH (tcp!127.0.0.1!567: none, so drawterm makes the
            tickets and DTUSER must be the cpu server's host owner),
            DTUSER (glenda), ROOT (/9front), WAIT (60 s; 0: don't),
            PASS (else asked on the tty: -it), DRAWTERM (drawterm.linux-ARCH)
+qemu:      -cpu: the cpuwait kernel, /9front's or /boot's 9pc64cpuwait, with
+           /boot/cpu.nvram; rcpu on port PORT (17019), so publish it
+           (-p 17019:17019) or drawterm from this container
+           else: the first of /9front's 9pc64, 9pc64cpuwait and /boot's
+           9pc64cpuwait with virtio9p, booting nobootprompt=virtio9p from
+           ROOT (/9front), writable, as glenda; with no -vga, rio has no
+           screen, and the console's rc follows
+           -vga: a VESA screen on VNC port 5900 (publish it), not the serial
+           console; -smp n (2), -m size (1G); KVM with --device /dev/kvm
+           -console: the serial console on tcp!*!CONSOLE_PORT (4444), one
+           client at a time (socat -,raw,echo=0 TCP:host:4444; nc), and
+           logged to standard output (docker logs), not on the terminal
+           a kernel's objtype comes from its name: 9pc64* amd64, 9pc* 386,
+           9qemu* arm64 (its .u beside it), 9rva23* riscv64
 EOF
 }
 
@@ -207,7 +227,7 @@ gateway() {
 # p9any offer) within wait: qemu's hostfwd accepts before the guest
 # listens, so a connection alone is not enough.
 findcpu() {
-	if [ -n "$cpu" ]; then hosts=$cpu; else hosts="host.docker.internal $(gateway)"; fi
+	if [ -n "$cpu" ]; then hosts=$cpu; else hosts="127.0.0.1 host.docker.internal $(gateway)"; fi
 	if [ -z "$(printf '%s' "$wait" | tr -d 0.)" ]; then
 		set -- $hosts
 		host=$1
@@ -242,15 +262,116 @@ drawterm() {
 	[ -x "$dt" ] || die "no $dt"
 	[ -x "$root/amd64/bin/rc" ] || die "$root is not an amd64 9front tree: no amd64/bin/rc"
 	findcpu
-	[ -n "$host" ] || die "nothing answers on port $port after $wait s (tried: ${cpu:-host.docker.internal, the default gateway}): is the cpuwait VM running, with qemu's hostfwd on 0.0.0.0?"
+	[ -n "$host" ] || die "nothing answers on port $port after $wait s (tried: ${cpu:-127.0.0.1, host.docker.internal, the default gateway}): is the cpuwait VM running, with qemu's hostfwd on 0.0.0.0?"
 	# files the session makes are group-writable, as the tree's are
 	umask 002
 	exec "$dt" -h "tcp!$host!$port" -a "$auth" -u "$user" -r "$root" "$@"
 }
 
+# kernel... : the first of them that has virtio9p
+virtio9p() {
+	for k in "$@"; do
+		[ -f "$k" ] && grep -q virtio9p "$k" && { echo "$k"; return; }
+	done
+}
+
+qemu() {
+	cpu= vga= con= smp=2 mem=1G kernel=
+	while [ $# -gt 0 ]; do
+		case $1 in
+		-cpu) cpu=1 ;;
+		-vga) vga=1 ;;
+		-console) con=1 ;;
+		-smp) [ $# -ge 2 ] || die "-smp needs a number" 64; smp=$2; shift ;;
+		-m) [ $# -ge 2 ] || die "-m needs a size" 64; mem=$2; shift ;;
+		-*) die "usage: 9front qemu [-cpu] [-vga] [-console] [-smp n] [-m size] [kernel]" 64 ;;
+		*) [ $# -eq 1 ] || die "usage: 9front qemu [-cpu] [-vga] [-console] [-smp n] [-m size] [kernel]" 64; kernel=$1 ;;
+		esac
+		shift
+	done
+	printf '%s\n' "$smp" | grep -Eqx '[1-9][0-9]*' || die "bad -smp: '$smp'" 64
+	printf '%s\n' "$mem" | grep -Eqx '[1-9][0-9]*[MG]?' || die "bad -m: '$mem'" 64
+	get ROOT "$ROOT"; root=$v
+	get PORT 17019 '[0-9]{1,5}'; port=$(decimal "$v")
+	get CONSOLE_PORT 4444 '[0-9]{1,5}'; cport=$(decimal "$v")
+	if [ -z "$kernel" ]; then
+		if [ -n "$cpu" ]; then
+			kernel=$root/amd64/9pc64cpuwait
+			[ -f "$kernel" ] || kernel=/boot/9pc64cpuwait
+		else
+			kernel=$(virtio9p "$root/amd64/9pc64" "$root/amd64/9pc64cpuwait" /boot/9pc64cpuwait)
+			[ -n "$kernel" ] || die "no kernel with virtio9p: name one"
+		fi
+	fi
+	[ -f "$kernel" ] || die "no kernel $kernel"
+	case ${kernel##*/} in
+	9pc64*) objtype=amd64 ;;
+	9pc*) objtype=386 ;;
+	9qemu*) objtype=arm64 ;;
+	9rva23*) objtype=riscv64 ;;
+	*) die "$kernel: which objtype? 9pc64*, 9pc*, 9qemu* or 9rva23*" 64 ;;
+	esac
+	case $objtype in
+	amd64|386)
+		q=qemu-system-x86_64
+		set -- -kernel "$kernel"
+		[ -w /dev/kvm ] && [ "$(uname -m)" = x86_64 ] && set -- "$@" -accel kvm -cpu host ;;
+	arm64)
+		q=qemu-system-aarch64
+		# the kernel reads its bootargs from the DTB at 0x40000000
+		kernel=${kernel%.u}.u
+		[ -f "$kernel" ] || die "no uImage $kernel"
+		set -- -M virt-2.12,gic-version=3 -cpu cortex-a72 -kernel "$kernel" ;;
+	riscv64)
+		q=qemu-system-riscv64
+		set -- -M virt -bios default -cpu rv64,svpbmt=true,zicbom=true,sstc=true -kernel "$kernel" ;;
+	esac
+	command -v $q >/dev/null 2>&1 || die "no $q: install it (apk add $q), from 9front shell or an image of your own"
+	set -- "$@" -m "$mem" -smp "$smp" -monitor none -device virtio-net-pci,netdev=net
+	if [ -n "$cpu" ]; then
+		set -- "$@" -append "console=0 service=cpu nvram=/dev/sdF0/data nobootprompt='cpuwait -g 10.0.2.2 ether /net/ether0 10.0.2.15 255.255.255.0'" \
+			-drive file=/boot/cpu.nvram,if=none,id=nvram,format=raw,readonly=on \
+			-device virtio-blk-pci,drive=nvram \
+			-netdev "user,id=net,hostfwd=tcp:0.0.0.0:$port-:17019"
+		echo "9front: rcpu on port $port" >&2
+	else
+		[ -x "$root/$objtype/bin/rc" ] || die "$root is not a $objtype 9front tree: no $objtype/bin/rc"
+		a="nobootprompt=virtio9p user=glenda"
+		if [ -n "$vga" ]; then
+			a="$a monitor=vesa vgasize=1024x768x16 mouseport=ps2intellimouse"
+		else
+			a="$a console=0"
+		fi
+		set -- "$@" -append "$a" -netdev user,id=net \
+			-fsdev "local,id=root,path=$root,security_model=none" \
+			-device virtio-9p-pci,fsdev=root,mount_tag=root
+	fi
+	if [ -n "$vga" ]; then
+		set -- "$@" -vga std -display vnc=0.0.0.0:0
+		echo "9front: screen on VNC port 5900" >&2
+	else
+		set -- "$@" -display none
+	fi
+	if [ $objtype = arm64 ]; then
+		dtb=$(mktemp)
+		$q "$@" -machine dumpdtb="$dtb" >/dev/null 2>&1 || die "cannot dump the DTB"
+		set -- "$@" -device "loader,file=$dtb,addr=0x40000000,force-raw=on"
+	fi
+	if [ -n "$con" ]; then
+		echo "9front: $objtype ${kernel##*/}; console on tcp port $cport" >&2
+		# the guest runs with no client; the log has what it missed
+		exec $q "$@" -chardev "socket,id=con,host=0.0.0.0,port=$cport,server=on,wait=off,logfile=/dev/stdout" \
+			-serial chardev:con </dev/null
+	fi
+	echo "9front: $objtype ${kernel##*/}; Ctrl-a x quits" >&2
+	exec $q "$@" -serial mon:stdio
+}
+
 case "$#:${1:-}:${2:-}" in
 0::*|1:serve:*) settings; serve ;;
 *:drawterm:*) shift; drawterm "$@" ;;
+*:qemu:*) shift; qemu "$@" ;;
+*:shell:*) shift; exec /bin/sh "$@" ;;
 1:help:*|1:--help:*|1:-h:*) help ;;
 1:kernel:*)
 	[ ! -t 1 ] || die "refusing to write the kernel to a terminal (no docker -t)"
