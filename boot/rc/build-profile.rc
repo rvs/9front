@@ -1,1 +1,1 @@
-exec /bin/rc /.ci/run.rc
+exec /bin/rc /boot/rc/run.rc
