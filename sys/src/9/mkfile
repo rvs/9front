@@ -8,7 +8,7 @@ ARCH_power64=
 ARCH_riscv64=rva23
 ARCH_spim=mt7688
 
-ARCH=\
+ARCH_all=\
 	$ARCH_386\
 	$ARCH_amd64\
 	$ARCH_arm\
@@ -18,6 +18,9 @@ ARCH=\
 	$ARCH_power64\
 	$ARCH_riscv64\
 	$ARCH_spim\
+
+ARCHTYPE=all
+ARCH=`{name=ARCH_^$ARCHTYPE; echo $$name}
 
 all:V:
 	for(i in $ARCH)@{
@@ -35,13 +38,6 @@ installall:V:
 	for(i in $ARCH) @{
 		cd $i
 		mk installall
-	}
-
-%.dirs:V:
-	arch=ARCH_^$objtype
-	for(i in $$arch) @{
-		cd $i
-		mk $stem
 	}
 
 clean:V:

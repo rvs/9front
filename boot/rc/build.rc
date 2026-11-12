@@ -16,7 +16,7 @@ cd /sys/src
 echo BUILD release $target
 mk release
 cd /sys/src/9
-mk -s 'EXTRACOPIES=' clean.dirs installall.dirs
+mk -s 'ARCHTYPE='^$target 'EXTRACOPIES=' clean installall
 for(f in /$target/9* /$target/s9*)
 	if(test -f $f) test -s $f
 for(f in init bin/rc bin/mk bin/ls lib/libc.a lib/libmach.a lib/ape/libap.a)
