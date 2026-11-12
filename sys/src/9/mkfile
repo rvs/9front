@@ -24,10 +24,16 @@ all:V:
 		mk
 	}
 
-installall install:V:
+install:V:
 	for(i in $ARCH) @{
 		cd $i
 		mk install
+	}
+
+installall:V:
+	for(i in $ARCH) @{
+		cd $i
+		mk installall
 	}
 
 clean:V:
