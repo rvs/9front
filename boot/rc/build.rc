@@ -1,0 +1,33 @@
+rfork e
+target=`{cat /.ci/target}
+objtype=amd64
+path=(/amd64/bin /rc/bin .)
+# parallel mk triggers mount reply mismatches
+NPROC=1
+@{
+	while(){
+		date
+		ps -ar
+		cat /dev/swap
+		sleep 60
+	}
+} >/.ci/progress.log >[2=1] &
+ramfs -m /tmp
+tools=`{sed -n 's/^(AS|CC|LD)=//p' /$target/mkfile}
+if(~ $target spim) tools=(va vc vl)
+cd /sys/src/cmd
+echo BUILD native tools $target
+mk -s 'DIRS=cc ../libmach 6c 6a 6l '^$"tools nuke.dirs install.dirs
+mk ar.install pcc.install nm.install size.install strip.install file.install
+objtype=$target
+cd /sys/src
+echo BUILD release $target
+mk release
+cd /sys/src/9
+mk -s 'ARCHTYPE='^$target 'EXTRACOPIES=' clean installall
+for(f in /$target/9* /$target/s9*)
+	if(test -f $f) test -s $f
+for(f in init bin/rc bin/mk bin/ls lib/libc.a lib/libmach.a lib/ape/libap.a)
+	test -s /$target/$f
+for(f in mkwnew spout winfs News Wiki)
+	test -s /acme/bin/$target/$f
