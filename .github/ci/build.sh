@@ -103,7 +103,7 @@ build() {
 	while IFS= read -r line; do
 		[[ ! $line =~ ^[[:space:]]*([a-zA-Z0-9]+)\\[[:space:]]*$ ]] || printf '%s ' "${BASH_REMATCH[1]}" >>"$root/.ci/env.rc"
 	done <"$root/sys/src/9/mkfile"
-	printf 'rva23)\n' >>"$root/.ci/env.rc"
+	printf ')\n' >>"$root/.ci/env.rc"
 	cp "$source/boot/rc/run.rc" "$root/.ci/run.rc"
 	cp "$source/boot/rc/build.rc" "$root/.ci/build.rc"
 	touch "$dir/console.log" "$root/.ci/build.log" "$root/.ci/progress.log"
