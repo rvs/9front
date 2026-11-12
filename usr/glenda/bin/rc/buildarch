@@ -21,8 +21,26 @@ if(~ $o all || ! ~ $o $archs){
 	echo buildarch: no kernel platform list for $o >[1=2]
 	exit objtype
 }
+if(! test -f /$o/mkfile)
+	fatal objtype $o
 
 EXTRACOPIES=()
+ramfs -m /tmp || fatal ramfs
+host=`{sed -n 's/^(AS|CC|LD)=//p' /$cputype/mkfile}
+tools=`{sed -n 's/^(AS|CC|LD)=//p' /$o/mkfile}
+if(~ $cputype spim)
+	host=(va vc vl)
+if(~ $o spim)
+	tools=(va vc vl)
+echo '# tools' $cputype $o
+@{
+	rfork e
+	objtype=$cputype
+	cd /sys/src/cmd || exit tools
+	mk -s 'DIRS=cc ../libmach '^$"host^' '^$"tools nuke.dirs install.dirs || exit tools
+	mk ar.install pcc.install nm.install size.install strip.install file.install || exit tools
+} || fatal tools $o
+
 echo '# world' $o
 build $o || fatal world $o
 @{cd /sys/src/9 && mk -s 'ARCHTYPE='^$o 'EXTRACOPIES=' clean} || fatal clean $o

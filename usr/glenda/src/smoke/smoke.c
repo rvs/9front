@@ -1,12 +1,7 @@
 #include <u.h>
 #include <libc.h>
 
-/*
- * smoke exercises a freshly built system. It checks that the
- * compiler and library produce correct code, then stresses the
- * allocator, processes, pipes, the file system and the network.
- * Each check prints a line and any failure exits non-empty.
- */
+/* exercise a freshly built system */
 
 enum
 {
@@ -41,13 +36,12 @@ ok(char *what)
 	print("smoke: %s ok\n", what);
 }
 
-/*
- * the compiler and library agree on integer, vlong and double code
- */
+/* the compiler and library agree on integer, vlong and double code */
 void
 verify(void)
 {
 	vlong v;
+	uvlong u;
 	double d;
 	char buf[32];
 
@@ -69,12 +63,18 @@ verify(void)
 	if(strtoll(buf, nil, 0) != v)
 		fail("print and scan disagree: %s", buf);
 
+	u = 1ULL << 40;
+	d = u;
+	if((uvlong)d != u || u/7 != 157073089682ULL)
+		fail("unsigned arithmetic");
+	snprint(buf, sizeof buf, "%llud", u);
+	if(strtoull(buf, nil, 10) != u)
+		fail("unsigned print and scan disagree: %s", buf);
+
 	ok("verify");
 }
 
-/*
- * the allocator hands out distinct, writable, intact blocks
- */
+/* the allocator hands out distinct, writable, intact blocks */
 void
 memory(void)
 {
@@ -116,20 +116,30 @@ churn(ulong n)
 	return s;
 }
 
-/*
- * fork stresses process creation, scheduling across cpus and wait
- */
+/* fork stresses copy on write, scheduling across cpus and wait */
 void
 processes(void)
 {
 	Waitmsg *w;
-	int i;
+	uchar *b;
+	uvlong v;
+	int i, j;
 
+	b = malloc(1);
+	if(b == nil)
+		fail("malloc: %r");
+	b[0] = 0;
 	for(i = 0; i < Nproc; i++)
 		switch(fork()){
 		case -1:
 			fail("fork: %r");
 		case 0:
+			b[0] = 255;
+			v = 0;
+			for(j = 0; j < 100000; j++)
+				v += j;
+			if(v != 4999950000ULL)
+				fail("child arithmetic");
 			sink = churn(Work);
 			exits(nil);
 		}
@@ -141,15 +151,17 @@ processes(void)
 			fail("child: %s", w->msg);
 		free(w);
 	}
+	if(b[0] != 0)
+		fail("copy on write");
+	free(b);
 	ok("processes");
 }
 
-/*
- * a child writes a known stream, the parent reads and checks every byte
- */
+/* a child writes a known stream, the parent checks every byte */
 void
 pipes(void)
 {
+	Waitmsg *w;
 	uchar *buf;
 	int p[2], i, n;
 	vlong off;
@@ -162,13 +174,17 @@ pipes(void)
 	case 0:
 		close(p[0]);
 		buf = malloc(Chunk);
+		if(buf == nil)
+			fail("malloc: %r");
 		for(off = 0; off < Nio; off += n){
 			for(i = 0; i < Chunk; i++)
 				buf[i] = (off+i) & 0xff;
 			n = Nio-off < Chunk ? Nio-off : Chunk;
 			if(write(p[1], buf, n) != n)
-				exits("write");
+				fail("write pipe: %r");
 		}
+		close(p[1]);
+		free(buf);
 		exits(nil);
 	}
 	close(p[1]);
@@ -182,27 +198,36 @@ pipes(void)
 				fail("pipe byte %lld corrupt", off+i);
 		off += n;
 	}
+	if(n < 0)
+		fail("read pipe: %r");
 	if(off != Nio)
 		fail("pipe short: %lld of %d", off, Nio);
+	close(p[0]);
 	free(buf);
+	w = wait();
+	if(w == nil)
+		fail("wait pipe: %r");
+	if(w->msg[0] != 0)
+		fail("pipe child: %s", w->msg);
+	free(w);
 	ok("pipes");
 }
 
-/*
- * write a file on the root, read it back and compare, exercising 9p
- */
+/* write a file, read it back and compare */
 void
 files(void)
 {
-	char *path = "/tmp/smoke.dat";
+	char path[64];
+	Dir *dir;
 	uchar *buf;
 	int fd, i, n;
 	vlong off;
 
+	snprint(path, sizeof path, "/tmp/smoke.%d", getpid());
 	buf = malloc(Chunk);
 	if(buf == nil)
 		fail("malloc: %r");
-	fd = create(path, OWRITE, 0666);
+	fd = create(path, OWRITE|OEXCL, 0600);
 	if(fd < 0)
 		fail("create %s: %r", path);
 	for(off = 0; off < Nio; off += n){
@@ -212,11 +237,19 @@ files(void)
 		if(write(fd, buf, n) != n)
 			fail("write %s: %r", path);
 	}
+	dir = dirfstat(fd);
+	if(dir == nil)
+		fail("stat %s: %r", path);
+	if(dir->length != Nio)
+		fail("file length: %lld of %d", dir->length, Nio);
+	free(dir);
 	close(fd);
 
 	fd = open(path, OREAD);
 	if(fd < 0)
 		fail("open %s: %r", path);
+	if(seek(fd, 0, 2) != Nio || seek(fd, 0, 0) != 0)
+		fail("seek %s: %r", path);
 	off = 0;
 	while((n = read(fd, buf, Chunk)) > 0){
 		for(i = 0; i < n; i++)
@@ -224,17 +257,18 @@ files(void)
 				fail("file byte %lld corrupt", off+i);
 		off += n;
 	}
+	if(n < 0)
+		fail("read %s: %r", path);
 	if(off != Nio)
 		fail("file short: %lld of %d", off, Nio);
 	close(fd);
-	remove(path);
+	if(remove(path) < 0)
+		fail("remove %s: %r", path);
 	free(buf);
 	ok("files");
 }
 
-/*
- * dial a server, send a request and confirm a sensible reply
- */
+/* dial a server, send a request and confirm a sensible reply */
 void
 network(void)
 {
