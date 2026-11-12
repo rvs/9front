@@ -1,0 +1,102 @@
+#!/usr/bin/env bash
+# ROOT, KERNEL, MEM (e.g. 512M), SMP and SERIAL override the defaults.
+set -e
+cd "$(dirname "$0")/.."
+
+root=${ROOT:-$PWD}
+mem=${MEM:-512M}
+smp=${SMP:-1}
+serial=${SERIAL:-stdio}
+arch=386
+cpuwait=false
+net=true
+vga=false
+
+while [ $# -gt 0 ]; do
+	case "$1" in
+	-386)		arch=386 ;;
+	-amd64)		arch=amd64 ;;
+	-arm64)		arch=arm64 ;;
+	-riscv64)	arch=riscv64 ;;
+	-cpuwait)	cpuwait=true ;;
+	-nonet)		net=false ;;
+	-smp)		smp=$2; shift ;;
+	-vga)		vga=true ;;
+	*)
+		echo 'usage: boot/qemu [-386 | -amd64 | -arm64 | -riscv64] [-cpuwait] [-nonet] [-smp n] [-vga]' >&2
+		exit 1
+		;;
+	esac
+	shift
+done
+
+case $arch in
+386)		base=9pc ;;
+amd64)		base=9pc64 ;;
+arm64)		base=9qemu ;;
+riscv64)	base=9rva23 ;;
+esac
+append='console=0 user=glenda service=terminal nobootprompt=virtio9p'
+forward=
+if $cpuwait; then
+	case $arch in
+	amd64|riscv64)	base=${base}cpuwait ;;
+	*) echo 'boot/qemu: cpuwait is available for amd64 and riscv64' >&2; exit 1 ;;
+	esac
+	$net || { echo 'boot/qemu: cpuwait needs networking' >&2; exit 1; }
+	append='console=0 user=glenda service=cpu nobootprompt=cpuwait'
+	forward=',hostfwd=tcp:127.0.0.1:17019-:17019'
+fi
+append="$append nvram=/dev/sdF0/data"
+kernel=${KERNEL:-$root/$arch/$base}
+gfx=(-display none)
+if $vga; then
+	case $arch in
+	386|amd64) ;;
+	*) echo 'boot/qemu: -vga is for x86 kernels' >&2; exit 1 ;;
+	esac
+	gfx=(-vga std)
+	append="$append monitor=vesa vgasize=1920x1080x32 mouseport=ps2intellimouse"
+fi
+args=(-m "$mem" -smp "$smp" "${gfx[@]}" -monitor none -serial "$serial" -no-reboot)
+# Public test credentials; not for production.
+# authid=glenda authdom=cpuwait; dp9ik password='glen||glenda'.
+# No secstore or p9sk1 key.
+args+=(-drive "file=$PWD/boot/cpu.nvram,if=none,id=nvram,format=raw,readonly=on"
+	-device virtio-blk-pci,drive=nvram,disable-legacy=on)
+
+case $arch in
+386|amd64)
+	qemu=qemu-system-x86_64
+	if [ -w /dev/kvm ]; then
+		args+=(-accel kvm -cpu host)
+	fi
+	args+=(-kernel "$kernel" -append "$append")
+	;;
+arm64)
+	qemu=qemu-system-aarch64
+	# QEMU ignores -append for Plan 9 uImages.
+	ini=$root/.qemu.ini
+	printf '%s\n' $append >"$ini"
+	printf '*maxmem=%#x\n*ncpu=%s\n' "$((0x40000000 + $(numfmt --from=iec "$mem")))" "$smp" >>"$ini"
+	args+=(-M virt,gic-version=3,highmem=off -cpu cortex-a72 -kernel "${kernel%.u}.u"
+		-device "loader,file=$ini,addr=0x40010000,force-raw=on")
+	;;
+riscv64)
+	qemu=qemu-system-riscv64
+	args+=(-M virt -bios default -cpu rv64,svpbmt=true,zicbom=true,sstc=true
+		-kernel "$kernel" -append "$append")
+	;;
+esac
+
+if ! $cpuwait; then
+	args+=(-fsdev "local,id=root,path=$root,security_model=none"
+		-device virtio-9p-pci,fsdev=root,mount_tag=root,disable-legacy=on)
+fi
+if $net; then
+	args+=(-device virtio-net-pci,netdev=net0,disable-legacy=on,romfile=
+		-netdev "user,id=net0$forward")
+else
+	args+=(-nic none)
+fi
+exec "$qemu" "${args[@]}"
