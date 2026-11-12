@@ -5,22 +5,16 @@ path=(/amd64/bin /rc/bin .)
 # parallel mk triggers mount reply mismatches
 NPROC=1
 ramfs -m /tmp
-fn build {
-	d=$1
-	shift
-	echo BUILD $d $*
-	cd /sys/src/$d
-	mk $*
-}
 tools=`{sed -n 's/^(AS|CC|LD)=//p' /$target/mkfile}
 if(~ $target spim) tools=(va vc vl)
-for(d in cmd/cc libmach cmd/6c cmd/6a cmd/6l cmd/$tools){
-	build $d nuke
-	build $d install
-}
-build cmd ar.install pcc.install nm.install size.install strip.install file.install
+cd /sys/src/cmd
+echo BUILD native tools $target
+mk -s 'DIRS=cc ../libmach 6c 6a 6l '^$"tools nuke.dirs install.dirs
+mk ar.install pcc.install nm.install size.install strip.install file.install
 objtype=$target
-build . release
+cd /sys/src
+echo BUILD release $target
+mk release
 for(k in $dirs){
 	cd /sys/src/9/$k
 	if(~ `{sed -n 's/^objtype=//p' mkfile} $target){
@@ -29,33 +23,19 @@ for(k in $dirs){
 			if(test -f $c) confs=($confs $c)
 			if not echo skipping missing configuration $k/$c
 		}
-		if(~ $k pc64 rva23) confs=($confs $k^cpuwait)
-		for(c in $confs){
-			echo KERNEL $k $c
-			if(~ $c *cpuwait){
-				cp `{echo $c | sed 's/cpuwait$//'} $c
-				rm -f $c.bootfs.proto
-			}
-			mk 'CONF='^$c clean
-			files=9$c
-			switch($k){
-			case bcm bcm64 kw omap teg2 rva23
-				files=($files s9$c)
-			case arm64 cycv imx8 lx2k
-				files=($files 9$c.u)
-			case xen
-				files=($files 9$c.gz)
-			}
-			mk 'CONF='^$c $files
-			if(~ $k rva23) files=($files 9$c.elf 9$c.elf.sym)
-			# Some install recipes contact remote servers; copy locally instead.
-			for(f in $files){
-				test -s $f
-				cp $f /$target/$f
-			}
+		if(~ $k pc64 rva23){
+			cp $k $k^cpuwait
+			rm -f $k^cpuwait.bootfs.proto
+			confs=($confs $k^cpuwait)
 		}
+		echo KERNEL $k $confs
+		mk clean
+		mk 'CONFLIST='^$"confs 'EXTRACOPIES=' installall
+		for(c in $confs) test -s /$target/9$c
 	}
 }
+for(f in /$target/9* /$target/s9*)
+	if(test -f $f) test -s $f
 for(f in init bin/rc bin/mk bin/ls lib/libc.a lib/libmach.a lib/ape/libap.a)
 	test -s /$target/$f
 for(f in mkwnew spout winfs News Wiki)
