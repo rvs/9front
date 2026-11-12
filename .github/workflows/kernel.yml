@@ -69,3 +69,7 @@ jobs:
             ${{ env.KCI_WORK }}/${{ matrix.arch }}/root/.ci
           if-no-files-found: ignore
           retention-days: 14
+
+  smoke:
+    needs: build
+    uses: ./.github/workflows/smoke.yml
