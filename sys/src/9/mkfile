@@ -1,22 +1,23 @@
+ARCH_386=pc xen
+ARCH_amd64=pc64
+ARCH_arm=bcm cycv kw omap teg2 zynq
+ARCH_arm64=arm64 bcm64 imx8 lx2k
+ARCH_mips=sgi
+ARCH_power=
+ARCH_power64=
+ARCH_riscv64=rva23
+ARCH_spim=mt7688
+
 ARCH=\
-	arm64\
-	bcm64\
-	bcm\
-	cycv\
-	imx8\
-	kw\
-	lx2k\
-	mt7688\
-	#mtx\
-	omap\
-	pc64\
-	pc\
-	#ppc\
-	rva23\
-	sgi\
-	teg2\
-	xen\
-	zynq\
+	$ARCH_386\
+	$ARCH_amd64\
+	$ARCH_arm\
+	$ARCH_arm64\
+	$ARCH_mips\
+	$ARCH_power\
+	$ARCH_power64\
+	$ARCH_riscv64\
+	$ARCH_spim\
 
 all:V:
 	for(i in $ARCH)@{
