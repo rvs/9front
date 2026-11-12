@@ -1,0 +1,13 @@
+@{
+	while(){
+		date
+		ps -ar
+		cat /dev/swap
+		sleep 60
+	}
+} >/.ci/progress.log >[2=1] &
+/bin/rc -be /.ci/build.rc >/.ci/build.log >[2=1]
+if(~ $status '') echo pass >/.ci/result.tmp
+if not echo fail >/.ci/result.tmp
+mv /.ci/result.tmp /.ci/result
+while() sleep 60

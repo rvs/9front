@@ -1,0 +1,1 @@
+exec /bin/rc /.ci/run.rc

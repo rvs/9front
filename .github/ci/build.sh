@@ -98,91 +98,14 @@ build() {
 	done < <(find "$bootstrap/amd64" -type d -printf '%P\n')
 	mkdir -p "$root/rc/bin/postscript" "$root/usr/glenda/tmp" "$root/usr/glenda/lib" "$root/sys/lib/dist/bin/$arch" "$root/acme/bin/$arch"
 	: >"$root/rc/bin/termrc" # no network or graphics startup
-	printf 'exec /bin/rc /.ci/run.rc\n' >"$root/usr/glenda/lib/profile"
+	cp "$source/boot/rc/build-profile.rc" "$root/usr/glenda/lib/profile"
 	printf 'target=%s\ndirs=(' "$arch" >"$root/.ci/env.rc"
 	while IFS= read -r line; do
 		[[ ! $line =~ ^[[:space:]]*([a-zA-Z0-9]+)\\[[:space:]]*$ ]] || printf '%s ' "${BASH_REMATCH[1]}" >>"$root/.ci/env.rc"
 	done <"$root/sys/src/9/mkfile"
 	printf 'rva23)\n' >>"$root/.ci/env.rc"
-	cat >"$root/.ci/run.rc" <<'RC'
-@{
-	while(){
-		date
-		ps -ar
-		cat /dev/swap
-		sleep 60
-	}
-} >/.ci/progress.log >[2=1] &
-/bin/rc -be /.ci/build.rc >/.ci/build.log >[2=1]
-if(~ $status '') echo pass >/.ci/result.tmp
-if not echo fail >/.ci/result.tmp
-mv /.ci/result.tmp /.ci/result
-while() sleep 60
-RC
-	cat >"$root/.ci/build.rc" <<'RC'
-rfork e
-. /.ci/env.rc
-objtype=amd64
-path=(/amd64/bin /rc/bin .)
-# parallel mk triggers mount reply mismatches
-NPROC=1
-ramfs -m /tmp
-fn build {
-	d=$1
-	shift
-	echo BUILD $d $*
-	cd /sys/src/$d
-	mk $*
-}
-tools=`{sed -n 's/^(AS|CC|LD)=//p' /$target/mkfile}
-if(~ $target spim) tools=(va vc vl)
-for(d in cmd/cc libmach cmd/6c cmd/6a cmd/6l cmd/$tools){
-	build $d nuke
-	build $d install
-}
-build cmd ar.install pcc.install nm.install size.install strip.install file.install
-objtype=$target
-build . release
-for(k in $dirs){
-	cd /sys/src/9/$k
-	if(~ `{sed -n 's/^objtype=//p' mkfile} $target){
-		confs=()
-		for(c in `{sed -n 's/^CONFLIST=//p' mkfile}){
-			if(test -f $c) confs=($confs $c)
-			if not echo skipping missing configuration $k/$c
-		}
-		if(~ $k pc64 rva23) confs=($confs $k^cpuwait)
-		for(c in $confs){
-			echo KERNEL $k $c
-			if(~ $c *cpuwait){
-				cp `{echo $c | sed 's/cpuwait$//'} $c
-				rm -f $c.bootfs.proto
-			}
-			mk 'CONF='^$c clean
-			files=9$c
-			switch($k){
-			case bcm bcm64 kw omap teg2 rva23
-				files=($files s9$c)
-			case arm64 cycv imx8 lx2k
-				files=($files 9$c.u)
-			case xen
-				files=($files 9$c.gz)
-			}
-			mk 'CONF='^$c $files
-			if(~ $k rva23) files=($files 9$c.elf 9$c.elf.sym)
-			# Some install recipes contact remote servers; copy locally instead.
-			for(f in $files){
-				test -s $f
-				cp $f /$target/$f
-			}
-		}
-	}
-}
-for(f in init bin/rc bin/mk bin/ls lib/libc.a lib/libmach.a lib/ape/libap.a)
-	test -s /$target/$f
-for(f in mkwnew spout winfs News Wiki)
-	test -s /acme/bin/$target/$f
-RC
+	cp "$source/boot/rc/run.rc" "$root/.ci/run.rc"
+	cp "$source/boot/rc/build.rc" "$root/.ci/build.rc"
 	touch "$dir/console.log" "$root/.ci/build.log" "$root/.ci/progress.log"
 	tail -n +1 -F "$dir/console.log" "$root/.ci/build.log" "$root/.ci/progress.log" &
 	logpid=$!

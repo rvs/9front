@@ -1,0 +1,4 @@
+rc -e /.smoke.rc
+if(~ $status '') echo SMOKE-OK
+if not echo SMOKE-FAIL
+while() sleep 60

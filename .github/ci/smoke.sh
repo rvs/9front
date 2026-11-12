@@ -13,28 +13,8 @@ mkdir -p "$root"/{bin,dev,env,fd,mnt,net,n,proc,root,srv,shr,tmp,usr/glenda/tmp}
 cp "$root/adm/timezone/GMT" "$root/adm/timezone/local"
 cp "$source/.github/ci/smoke.c" "$root/.smoke.c"
 : >"$root/rc/bin/termrc"
-cat >"$root/usr/glenda/lib/profile" <<'RC'
-rc -e /.smoke.rc
-if(~ $status '') echo SMOKE-OK
-if not echo SMOKE-FAIL
-while() sleep 60
-RC
-cat >"$root/.smoke.rc" <<'RC'
-objtype=$cputype
-path=(/$cputype/bin /rc/bin .)
-NPROC=1
-cd /tmp
-cp /.smoke.c smoke.c
-echo '</$objtype/mkfile
-TARG=smoke
-OFILES=smoke.$O
-</sys/src/cmd/mkone' >mkfile
-mk install 'BIN=/tmp'
-./smoke
-ip/ipconfig -g 10.0.2.2 ether /net/ether0 10.0.2.15 255.255.255.0
-ip/ping -n 3 10.0.2.2
-echo 'smoke: network ok'
-RC
+cp "$source/boot/rc/smoke-profile.rc" "$root/usr/glenda/lib/profile"
+cp "$source/boot/rc/smoke.rc" "$root/.smoke.rc"
 ROOT="$root" KERNEL="$root/$arch/$kernel" SMOKE_LOG="$work/console.log" \
 expect -f - "$source/boot/qemu" "-$arch" <<'EXPECT'
 set timeout 600
