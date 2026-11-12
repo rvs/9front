@@ -13,17 +13,17 @@ tar -xf "$seed"
 mv amd64/9pc64cpuwait .ci/kernel
 chmod -R u+rwX amd64/bin amd64/lib amd64/init
 mkdir -p {bin,dev,env,fd,mnt,net,n,proc,root,srv,shr,tmp}
-mkdir -p rc/bin/postscript usr/glenda/tmp usr/glenda/lib "acme/bin/$arch" "sys/lib/dist/bin/$arch"
+mkdir -p rc/bin/postscript usr/glenda/tmp usr/glenda/batch "acme/bin/$arch" "sys/lib/dist/bin/$arch"
 while IFS= read -r dir; do
 	mkdir -p "$arch/${dir#amd64/}"
 done < <(find amd64/bin amd64/lib -type d)
 cp adm/timezone/GMT adm/timezone/local
-: >rc/bin/termrc
-cp boot/rc/build-profile.rc usr/glenda/lib/profile
+printf 'service=batch\n' >rc/bin/termrc
+cp boot/rc/build.rc usr/glenda/batch/build.rc
 printf '%s\n' "$arch" >.ci/target
-touch .ci/console.log .ci/build.log .ci/progress.log .ci/qemu.log
+touch .ci/console.log .ci/progress.log .ci/qemu.log
 
-tail -n +1 -F .ci/console.log .ci/build.log .ci/progress.log .ci/qemu.log &
+tail -n +1 -F .ci/console.log .ci/progress.log .ci/qemu.log &
 logs=$!
 ROOT=$PWD KERNEL=$PWD/.ci/kernel SMP=${SMP:-2} MEM=${MEM:-2G} SERIAL=file:$PWD/.ci/console.log \
 	timeout -k 5 9000 boot/qemu -amd64 -nonet >.ci/qemu.log 2>&1 &
@@ -36,11 +36,11 @@ trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM HUP
 
-until [[ -f .ci/result ]]; do
+until grep -Eq 'BATCH-(PASS|FAIL)' .ci/console.log; do
 	kill -0 "$qemu" 2>/dev/null || { echo 'QEMU exited before the build finished' >&2; exit 1; }
 	sleep 2
 done
-[[ $(<.ci/result) == pass ]] || { echo 'build failed' >&2; exit 1; }
+grep -q 'BATCH-PASS' .ci/console.log || { echo 'build failed' >&2; exit 1; }
 cleanup
 trap - EXIT
 

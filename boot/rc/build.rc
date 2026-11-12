@@ -1,9 +1,17 @@
 rfork e
-target=$1
+target=`{cat /.ci/target}
 objtype=amd64
 path=(/amd64/bin /rc/bin .)
 # parallel mk triggers mount reply mismatches
 NPROC=1
+@{
+	while(){
+		date
+		ps -ar
+		cat /dev/swap
+		sleep 60
+	}
+} >/.ci/progress.log >[2=1] &
 ramfs -m /tmp
 tools=`{sed -n 's/^(AS|CC|LD)=//p' /$target/mkfile}
 if(~ $target spim) tools=(va vc vl)

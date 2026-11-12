@@ -9,12 +9,11 @@ mkdir -p "$work"
 mkdir "$root"
 git -C "$source" archive HEAD | tar -xf - -C "$root"
 tar -xzf "$3" -C "$root"
-mkdir -p "$root"/{bin,dev,env,fd,mnt,net,n,proc,root,srv,shr,tmp,usr/glenda/tmp}
+mkdir -p "$root"/{bin,dev,env,fd,mnt,net,n,proc,root,srv,shr,tmp,usr/glenda/tmp,usr/glenda/batch}
 cp "$root/adm/timezone/GMT" "$root/adm/timezone/local"
 cp "$source/.github/ci/smoke.c" "$root/.smoke.c"
-: >"$root/rc/bin/termrc"
-cp "$source/boot/rc/smoke-profile.rc" "$root/usr/glenda/lib/profile"
-cp "$source/boot/rc/smoke.rc" "$root/.smoke.rc"
+printf 'service=batch\n' >"$root/rc/bin/termrc"
+cp "$source/boot/rc/smoke.rc" "$root/usr/glenda/batch/smoke.rc"
 ROOT="$root" KERNEL="$root/$arch/$kernel" SMOKE_LOG="$work/console.log" \
 expect -f - "$source/boot/qemu" "-$arch" <<'EXPECT'
 set timeout 600
@@ -23,8 +22,8 @@ spawn -noecho {*}$argv
 trap {catch {exec kill [exp_pid]}; exit 1} {SIGINT SIGTERM SIGHUP}
 set status 1
 expect {
-	"SMOKE-OK" {set status 0}
-	"SMOKE-FAIL" {}
+	"BATCH-PASS" {set status 0}
+	"BATCH-FAIL" {}
 	timeout {puts stderr "smoke: timed out"}
 	eof {puts stderr "smoke: QEMU exited"}
 }

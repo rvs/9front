@@ -62,9 +62,7 @@ jobs:
           path: |
             .ci/console.log
             .ci/qemu.log
-            .ci/build.log
             .ci/progress.log
-            .ci/result
           if-no-files-found: ignore
           retention-days: 14
 
