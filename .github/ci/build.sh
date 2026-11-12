@@ -99,11 +99,7 @@ build() {
 	mkdir -p "$root/rc/bin/postscript" "$root/usr/glenda/tmp" "$root/usr/glenda/lib" "$root/sys/lib/dist/bin/$arch" "$root/acme/bin/$arch"
 	: >"$root/rc/bin/termrc" # no network or graphics startup
 	cp "$source/boot/rc/build-profile.rc" "$root/usr/glenda/lib/profile"
-	printf 'target=%s\ndirs=(' "$arch" >"$root/.ci/env.rc"
-	while IFS= read -r line; do
-		[[ ! $line =~ ^[[:space:]]*([a-zA-Z0-9]+)\\[[:space:]]*$ ]] || printf '%s ' "${BASH_REMATCH[1]}" >>"$root/.ci/env.rc"
-	done <"$root/sys/src/9/mkfile"
-	printf ')\n' >>"$root/.ci/env.rc"
+	printf '%s\n' "$arch" >"$root/.ci/target"
 	cp "$source/boot/rc/run.rc" "$root/.ci/run.rc"
 	cp "$source/boot/rc/build.rc" "$root/.ci/build.rc"
 	touch "$dir/console.log" "$root/.ci/build.log" "$root/.ci/progress.log"
