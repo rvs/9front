@@ -1,149 +1,96 @@
 #!/usr/bin/env bash
-
+# ROOT, KERNEL, MEM (e.g. 512M), SMP and SERIAL override the defaults.
 set -e
-cd $(dirname $0)/..
+cd "$(dirname "$0")/.."
 
-mem=4G
-smp=4
-mac=mac=52:54:00:12:34:56
-pxe=boot/pxeboot.raw
-vgasize=1920x1080x32
-
-u9fs=false
+root=${ROOT:-$PWD}
+mem=${MEM:-512M}
+smp=${SMP:-1}
+serial=${SERIAL:-stdio}
 arch=386
-kind=term
-boot=multiboot
+cpuwait=false
+net=true
 vga=false
 
 while [ $# -gt 0 ]; do
 	case "$1" in
-	-u9fs)		u9fs=true ;;
 	-386)		arch=386 ;;
 	-amd64)		arch=amd64 ;;
+	-arm64)		arch=arm64 ;;
 	-riscv64)	arch=riscv64 ;;
-	-arm)		arch=arm ;;
-	-cpu)		kind=cpu ;;
-	-smp)		smp=$2; shift; case $smp in ''|*[!0-9]*) echo 'boot/qemu: -smp needs a number' >&2; exit 1 ;; esac ;;
-	-9fat)		boot=9fat ;;
+	-cpuwait)	cpuwait=true ;;
+	-nonet)		net=false ;;
+	-smp)		smp=$2; shift ;;
 	-vga)		vga=true ;;
 	*)
-		echo 'usage: boot/qemu [-386 | -amd64 | -riscv64 | -arm] [-cpu | -vga] [-smp n] [-9fat] [-u9fs]' >&2
+		echo 'usage: boot/qemu [-386 | -amd64 | -arm64 | -riscv64] [-cpuwait] [-nonet] [-smp n] [-vga]' >&2
 		exit 1
+		;;
 	esac
 	shift
 done
 
-if [ $arch = riscv64 ] && { [ $vga = true ] || [ $boot = 9fat ] || [ $u9fs = true ]; }; then
-	echo 'boot/qemu: -riscv64 boots only the rva23 cpu kernel over virtio-9p' >&2
-	exit 1
+case $arch in
+386)		base=9pc ;;
+amd64)		base=9pc64 ;;
+arm64)		base=9qemu ;;
+riscv64)	base=9rva23 ;;
+esac
+append='console=0 user=glenda service=terminal nobootprompt=virtio9p'
+forward=
+if $cpuwait; then
+	case $arch in
+	amd64|riscv64)	base=${base}cpuwait ;;
+	*) echo 'boot/qemu: cpuwait is available for amd64 and riscv64' >&2; exit 1 ;;
+	esac
+	$net || { echo 'boot/qemu: cpuwait needs networking' >&2; exit 1; }
+	append='console=0 user=glenda service=cpu nobootprompt=cpuwait'
+	forward=',hostfwd=tcp:127.0.0.1:17019-:17019'
 fi
-
-if [ $vga = true ] && { [ $kind = cpu ] || [ $boot = 9fat ] || [ $u9fs = true ]; }; then
-	echo 'boot/qemu: -vga is for the default terminal kernel (no -cpu/-9fat/-u9fs)' >&2
-	exit 1
+kernel=${KERNEL:-$root/$arch/$base}
+gfx=(-display none)
+if $vga; then
+	case $arch in
+	386|amd64) ;;
+	*) echo 'boot/qemu: -vga is for x86 kernels' >&2; exit 1 ;;
+	esac
+	gfx=(-vga std)
+	append="$append monitor=vesa vgasize=1920x1080x32 mouseport=ps2intellimouse"
 fi
-
-if [ $arch = arm ] && { [ $vga = true ] || [ $boot = 9fat ] || [ $kind = cpu ]; }; then
-	echo 'boot/qemu: -arm boots only the pi2 terminal kernel over u9fs' >&2
-	exit 1
-fi
-
-kvm=
-if [ -w /dev/kvm ]; then
-	kvm='-enable-kvm -cpu host'
-fi
-
-if [ $u9fs = true ] || [ $arch = arm ]; then
-	echo '# building u9fs' >&2
-	make -C sys/src/cmd/unix/u9fs
-	fwd="guestfwd=tcp:10.0.2.1:564-cmd:sys/src/cmd/unix/u9fs/u9fs -a none -u $USER ."
-fi
-
-# the pi2 kernel on qemu raspi2b, built by boot/mkqemu with the
-# patches it needs.  -bios loads the kernel at 0x8000 and starts it
-# as the firmware does; boot/pi2.ini goes where the firmware leaves
-# the command line.  the console is the mini uart, the second serial
-# port.  the machine has no network but usb: the root is u9fs over a
-# usb-net device, on the root port, as the hub qemu adds otherwise
-# has a descriptor plan 9 does not take
-if [ $arch = arm ]; then
-	elf=arm/9pi2
-	if [ ! -f $elf ]; then
-		echo "boot/qemu: $elf missing" >&2
-		echo "# build it in a 386 guest: cd /sys/src/9/bcm && objtype=arm mk 'CONF=pi2'" >&2
-		exit 1
-	fi
-	qemu=$(boot/mkqemu)
-	exec $qemu -M raspi2b -bios $elf -display none \
-		-serial null -serial stdio \
-		-device loader,file=boot/pi2.ini,addr=0x100,force-raw=on \
-		-device usb-net,netdev=net0,port=1,$mac \
-		-netdev "user,id=net0,$fwd"
-fi
-
-if [ $u9fs = true ]; then
-	tftp='tftp=.'
-	exec qemu-system-x86_64 -m $mem -smp $smp -serial stdio $kvm \
-		-drive file=$pxe,format=raw -snapshot \
-		-device virtio-net-pci,netdev=net0,$mac \
-		-netdev "user,id=net0,$fwd,$tftp"
-fi
-
-gfx='-display none'
-[ $vga = true ] && gfx='-vga std'
-
-net9p="-fsdev local,id=root9p,path=$PWD,security_model=none \
-	-device virtio-9p-pci,fsdev=root9p,mount_tag=root,disable-legacy=on"
-slirp="-device virtio-net-pci,netdev=net0,$mac -netdev user,id=net0"
-
-# the rva23 kernel on qemu virt, entered in S mode by OpenSBI;
-# there is no kvm for it, memory must end below 4GiB, and its
-# virtio drivers know only modern (virtio 1.0) devices
-if [ $arch = riscv64 ]; then
-	elf=riscv64/9rva23
-	if [ ! -f $elf ]; then
-		echo "boot/qemu: $elf missing" >&2
-		echo '# build it in a 386 guest: cd /sys/src/9/rva23 && mk install' >&2
-		exit 1
-	fi
-	[ $smp -gt 8 ] && smp=8
-	exec qemu-system-riscv64 -M virt -bios default \
-		-cpu rv64,svpbmt=true,zicbom=true,sstc=true \
-		-m 2G -smp $smp $gfx -serial stdio \
-		$net9p -device virtio-net-pci,netdev=net0,$mac,disable-legacy=on \
-		-netdev user,id=net0 -kernel $elf \
-		-append "nobootprompt=virtio9p sysname=9legacy-$arch user=glenda"
-fi
-
-if [ $boot = 9fat ]; then
-	fat=boot/9fat.raw
-	if [ ! -f $fat ]; then
-		echo "boot/qemu: $fat missing" >&2
-		echo '# build it in a running guest: mk9fat' >&2
-		exit 1
-	fi
-	exec qemu-system-x86_64 -m $mem -smp $smp $gfx -serial stdio $kvm \
-		$net9p $slirp -drive file=$fat,format=raw -snapshot
-fi
+args=(-m "$mem" -smp "$smp" "${gfx[@]}" -monitor none -serial "$serial" -no-reboot)
 
 case $arch in
-386)	base=9pc ;;
-amd64)	base=9k10 ;;
+386|amd64)
+	qemu=qemu-system-x86_64
+	if [ -w /dev/kvm ]; then
+		args+=(-accel kvm -cpu host)
+	fi
+	args+=(-kernel "$kernel" -append "$append")
+	;;
+arm64)
+	qemu=qemu-system-aarch64
+	# QEMU ignores -append for Plan 9 uImages.
+	ini=$root/.qemu.ini
+	printf '%s\n' $append >"$ini"
+	printf '*maxmem=%#x\n*ncpu=%s\n' "$((0x40000000 + $(numfmt --from=iec "$mem")))" "$smp" >>"$ini"
+	args+=(-M virt,gic-version=3,highmem=off -cpu cortex-a72 -kernel "${kernel%.u}.u"
+		-device "loader,file=$ini,addr=0x40010000,force-raw=on")
+	;;
+riscv64)
+	qemu=qemu-system-riscv64
+	args+=(-M virt -bios default -cpu rv64,svpbmt=true,zicbom=true,sstc=true
+		-kernel "$kernel" -append "$append")
+	;;
 esac
-if [ $kind = cpu ]; then base=${base}cpuf; else base=${base}f; fi
-elf=$arch/$base.elf
-if [ ! -f $elf ]; then
-	echo "boot/qemu: $elf missing" >&2
-	echo '# run boot/getbin to install the kernels' >&2
-	[ $arch = 386 ] && echo "# or build it in a guest: cd /sys/src/9/pc && mk CONF=${base#9} $base.elf" >&2
-	echo '# or boot the menu disk instead: boot/qemu -9fat' >&2
-	exit 1
+
+if ! $cpuwait; then
+	args+=(-fsdev "local,id=root,path=$root,security_model=none"
+		-device virtio-9p-pci,fsdev=root,mount_tag=root,disable-legacy=on)
 fi
-append="nobootprompt=virtio9p sysname=9legacy-$arch user=glenda factotumopts=-n"
-if [ $vga = true ]; then
-	append="$append monitor=vesa vgasize=$vgasize mouseport=ps2intellimouse"
+if $net; then
+	args+=(-device virtio-net-pci,netdev=net0,disable-legacy=on,romfile=
+		-netdev "user,id=net0$forward")
 else
-	append="$append console=0 b115200"
+	args+=(-nic none)
 fi
-exec qemu-system-x86_64 -m $mem -smp $smp $gfx -serial stdio $kvm \
-	$net9p $slirp -kernel $elf -append "$append"
+exec "$qemu" "${args[@]}"

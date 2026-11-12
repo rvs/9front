@@ -186,13 +186,8 @@ RC
 	touch "$dir/console.log" "$root/.ci/build.log" "$root/.ci/progress.log"
 	tail -n +1 -F "$dir/console.log" "$root/.ci/build.log" "$root/.ci/progress.log" &
 	logpid=$!
-	qemu-system-x86_64 -accel kvm -cpu host -m "$memory" -smp "$cpus" \
-		-display none -monitor none -serial "file:$dir/console.log" -no-reboot \
-		-kernel "$bootstrap/amd64/9pc64cpuwait" \
-		-append 'console=0 user=glenda service=terminal nobootprompt=virtio9p' \
-		-fsdev "local,id=root,path=$root,security_model=none" \
-		-device virtio-9p-pci,fsdev=root,mount_tag=root,disable-legacy=on -nic none \
-		>"$dir/qemu.log" 2>&1 &
+	ROOT="$root" KERNEL="$bootstrap/amd64/9pc64cpuwait" MEM="$memory" SMP="$cpus" \
+		SERIAL="file:$dir/console.log" "$source/boot/qemu" -amd64 -nonet >"$dir/qemu.log" 2>&1 &
 	qemu=$!; started=$SECONDS; deadline=$((SECONDS + limit)); next=$((SECONDS + 60))
 	while [[ ! -f $root/.ci/result ]]; do
 		kill -0 "$qemu" && (( SECONDS < deadline )) || { echo "$arch: guest exited or timed out" >&2; return 1; }
