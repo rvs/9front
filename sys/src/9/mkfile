@@ -37,6 +37,13 @@ installall:V:
 		mk installall
 	}
 
+%.dirs:V:
+	arch=ARCH_^$objtype
+	for(i in $$arch) @{
+		cd $i
+		mk $stem
+	}
+
 clean:V:
 	for(i in $ARCH) @{
 		cd $i

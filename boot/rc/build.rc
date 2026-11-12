@@ -15,29 +15,8 @@ objtype=$target
 cd /sys/src
 echo BUILD release $target
 mk release
-dirs=()
-switch($target){
-case 386
-	dirs=(pc xen)
-case amd64
-	dirs=(pc64)
-case arm
-	dirs=(bcm cycv kw omap teg2 zynq)
-case arm64
-	dirs=(arm64 bcm64 imx8 lx2k)
-case mips
-	dirs=(sgi)
-case riscv64
-	dirs=(rva23)
-case spim
-	dirs=(mt7688)
-}
-for(k in $dirs){
-	cd /sys/src/9/$k
-	echo KERNEL $k
-	mk clean
-	mk 'EXTRACOPIES=' installall
-}
+cd /sys/src/9
+mk -s 'EXTRACOPIES=' clean.dirs installall.dirs
 for(f in /$target/9* /$target/s9*)
 	if(test -f $f) test -s $f
 for(f in init bin/rc bin/mk bin/ls lib/libc.a lib/libmach.a lib/ape/libap.a)
