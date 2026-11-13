@@ -72,7 +72,13 @@ append="$append nvram=/dev/sdF0/data"
 if $kitty; then
 	case $arch in
 	386|amd64) ;;
-	*) echo 'boot/qemu: -kitty is for x86 kernels' >&2; exit 1 ;;
+	arm64)
+		if $kittyuart; then
+			echo 'boot/qemu: -kitty-uart needs an x86 COM2; use -kitty on arm64' >&2
+			exit 1
+		fi
+		;;
+	*) echo 'boot/qemu: -kitty is for x86 and arm64 kernels' >&2; exit 1 ;;
 	esac
 	if $vga || $cpuwait; then
 		echo 'boot/qemu: -kitty needs a terminal kernel without -vga' >&2
@@ -82,7 +88,7 @@ if $kitty; then
 	if $kittyuart; then
 		append="$append kittyuart=1 monitor=kitty"
 	else
-		append="$append kittyuart=2 monitor=kitty"
+		append="$append kittyuart=virtserialport1 monitor=kitty"
 	fi
 	if [ "$scale" != 0 ]; then
 		append="$append kittyscale=$scale"
@@ -108,9 +114,11 @@ if $kitty; then
 	if $kittyuart; then
 		args+=(-serial stdio)
 	else
-		# Keep both ISA UARTs present so the new port is eia2.
-		args+=(-serial null
-			-chardev stdio,id=kitty,signal=off
+		# Preserve the x86 COM2 backend for legacy UART users.
+		case $arch in
+		386|amd64) args+=(-serial null) ;;
+		esac
+		args+=(-chardev stdio,id=kitty,signal=off
 			-device virtio-serial-pci,id=kittyserial,disable-legacy=on,max_ports=2
 			-device virtserialport,bus=kittyserial.0,chardev=kitty,nr=1,name=org.9front.kitty)
 	fi

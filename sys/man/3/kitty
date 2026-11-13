@@ -15,24 +15,30 @@ device uses a dedicated byte stream to display the kernel screen
 in a terminal supporting the Kitty graphics protocol.
 It provides a software framebuffer for the ordinary
 .IR draw (3)
-device, including the bitmap console and software cursor.
+device, including the software cursor.
+The PC adapter also displays the bitmap console;
+the ARM64 text console remains on the PL011 UART.
 Mouse reports are delivered through
 .IR mouse (3).
 The device is currently included in the
-.B pc
-and
+.BR pc ,
 .B pc64
+and ARM64
+.B qemu
 kernels.
 Rebuild and install
 .B /sys/src/libflate
 for the target architecture before linking these kernels.
 .PP
 Set
-.BI kittyuart= n
+.BI kittyuart= port
 and
 .B monitor=kitty
 in the kernel configuration.
-The numbered UART must not be the serial console or already open.
+The UART is selected by its driver name or its
+.B eia
+number and must not be the serial console or already open.
+Names must identify exactly one UART.
 It is reserved until reboot and configured for eight data bits,
 one stop bit, no parity, and no flow control.
 Physical UARTs run at 115200 baud.
@@ -52,16 +58,20 @@ The checkout's
 .B boot/qemu
 launcher selects a modern virtio-serial generic port for graphics with
 .BR -kitty ;
-COM1 console output defaults to
+Console output defaults to
 .B .qemu.console.log
 in the exported root.
-COM2 is connected to a null backend to keep UART numbering stable;
-the graphics stream is UART 2.
+The graphics stream is selected by the name
+.BR virtserialport1 ,
+independently of architecture and UART enumeration.
+On x86 COM2 is connected to a null backend;
+on ARM64 the PL011 remains the console.
 For example, from a Kitty-compatible terminal with a built kernel
 and userland:
 .IP
 .EX
 boot/qemu -amd64 -kitty
+boot/qemu -arm64 -kitty
 .EE
 .PP
 The launcher probes hardware acceleration when the host and guest
@@ -120,9 +130,10 @@ logical screen dimensions, not that factor.
 The
 .B uartvcon
 transport in the
-.B pc
-and
+.BR pc ,
 .B pc64
+and ARM64
+.B qemu
 kernels supports only generic port 1 of a modern PCI virtio-serial
 controller with memory-mapped capabilities and the multiport feature.
 The launcher supplies this controller and a
@@ -145,9 +156,12 @@ Closing can discard the last transmit buffer if the host has not consumed it.
 instead connects COM2 to terminal standard input and output and
 selects UART 1, as needed by kernels without
 .BR uartvcon .
+This option is only supported on x86;
+ARM64 must use
+.BR -kitty .
 For a physical connection, configure
 .B kittyuart
-with the appropriate UART number instead of using the launcher.
+with the appropriate UART name or number instead of using the launcher.
 .PP
 .B -kitty
 and
@@ -156,7 +170,7 @@ cannot be combined with
 .B -vga
 or
 .BR -cpuwait .
-ARM64 and RISC-V screen and transport adapters are not provided.
+RISC-V screen support is not provided.
 If the launcher is killed before it restores terminal modes,
 run the host's terminal reset command.
 Rebooting the guest ends QEMU; otherwise stop QEMU from another
@@ -238,13 +252,19 @@ Input exceeding the queue limit is dropped and counted.
 .SH FILES
 .TF /sys/src/9/port/kitty.c
 .TP
-.B /sys/src/9/pc/devkitty.c
-Screen, UART, and device integration.
+.B /sys/src/9/port/devkitty.c
+Architecture-independent rendering, input, and device integration.
 .TP
 .B /sys/src/9/pc/vgakitty.c
-VGA framebuffer flush adapter.
+PC VGA framebuffer and screen adapter.
 .TP
-.B /sys/src/9/pc/uartvcon.c
+.B /sys/src/9/arm64/screen.c
+ARM64 software framebuffer adapter.
+.TP
+.B /sys/src/9/port/kittyscreen.h
+Screen adapter interface.
+.TP
+.B /sys/src/9/port/uartvcon.c
 Fixed-port virtio-serial transport.
 .TP
 .B /sys/src/9/port/kitty.c
@@ -260,8 +280,8 @@ Parser interface.
 .IR kbdfs (8),
 .IR rio (1)
 .SH LIMITATIONS
-Only PC screen and transport adapters are provided.
-It does not use shared memory, compressed graphics, frame editing,
+Screen adapters are provided for PC and ARM64 QEMU kernels.
+It does not use shared memory, frame editing,
 OSC 52 clipboard synchronization, or audio.
 Raw RGB over a real 115200-baud link is slow.
 Use a dedicated connection to a trusted terminal; this is not an

@@ -12,6 +12,9 @@ dev
 	tls
 	cap
 	fs
+	draw	screen swcursor
+	mouse	screen swcursor
+	kitty	kitty flate
 	ether	netif
 	bridge	log
 	ip	arp chandial ip ipv6 ipaux iproute netlog nullmedium pktmedium inferno
@@ -43,6 +46,7 @@ ip
 misc
 	gic
 	uartqemu
+	uartvcon	pci virtio10mem
 	sdvirtio10	pci sdscsi virtio10mem
 port
 	int cpuserver = 0;

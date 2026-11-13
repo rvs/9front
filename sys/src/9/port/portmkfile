@@ -99,8 +99,8 @@ devdraw.$O:	screen.h /sys/include/draw.h /sys/include/memdraw.h /sys/include/mem
 devmouse.$O:	screen.h /sys/include/draw.h /sys/include/memdraw.h /sys/include/cursor.h
 swcursor.$O:	screen.h /sys/include/draw.h /sys/include/memdraw.h /sys/include/cursor.h
 screen.$O:	screen.h /sys/include/draw.h /sys/include/memdraw.h /sys/include/cursor.h
-devkitty.$O vgakitty.$O:	screen.h /sys/include/draw.h /sys/include/memdraw.h /sys/include/cursor.h ../port/kitty.h
-devkitty.$O:	/sys/include/flate.h
+devkitty.$O:	../port/kitty.h ../port/kittyscreen.h /sys/include/draw.h /sys/include/memdraw.h /sys/include/flate.h
+vgakitty.$O:	screen.h ../port/kittyscreen.h /sys/include/draw.h /sys/include/memdraw.h /sys/include/cursor.h
 uartvcon.$O:	../port/virtio10.h
 kitty.$O:	../port/kitty.h /sys/include/keyboard.h
 thwack.$O:	../port/thwack.h

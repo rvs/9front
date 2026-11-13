@@ -9,10 +9,9 @@
 #define Image IMAGE
 #include <draw.h>
 #include <memdraw.h>
-#include <cursor.h>
 #include <flate.h>
-#include "screen.h"
-#include "../port/kitty.h"
+#include "kitty.h"
+#include "kittyscreen.h"
 
 enum {
 	Maxwidth = 1920,
@@ -89,8 +88,6 @@ static struct {
 	char	*status;
 } kitty;
 
-extern VGAdev vgakittydev;
-extern VGAcur vgasoftcur;
 
 static Dirtab kittydir[] = {
 	".",		{Qdir, 0, QTDIR},	0,	0550,
@@ -123,7 +120,7 @@ alltiles(void)
 
 /* called with the console or draw locks held, sometimes at interrupt level */
 void
-kittyflush(VGAscr*, Rectangle r)
+kittyflush(Rectangle r)
 {
 	int x, y;
 
@@ -375,7 +372,6 @@ probe(int query)
 static void
 resize(void)
 {
-	VGAscr *scr;
 	int w, h, pw, ph, cw, ch, s, n, screen;
 
 	ilock(&kitty);
@@ -404,21 +400,13 @@ resize(void)
 	iunlock(&kitty);
 	deleteimages(n);
 
-	scr = &vgascreen[0];
 	if(screen){
 		qlock(&drawlock);
 		if(waserror()){
 			qunlock(&drawlock);
 			nexterror();
 		}
-		cursoroff();
-		deletescreenimage();
-		setscreensize(scr, w, h, 32, XRGB32, 0);
-		vgascreenwin(scr);
-		vgasoftcur.enable(scr);
-		setcursor(&cursor);
-		cursoron();
-		resetscreenimage();
+		kittyscreenresize(w, h);
 		qunlock(&drawlock);
 		poperror();
 	}
@@ -464,7 +452,6 @@ work(void*)
 static int
 snapshot(Rectangle *rp, int *sent, int nsent)
 {
-	VGAscr *scr;
 	Memimage *m;
 	Rectangle r, src;
 	uchar *p, *q;
@@ -499,13 +486,11 @@ snapshot(Rectangle *rp, int *sent, int nsent)
 
 	src = Rect(r.min.x/s, r.min.y/s,
 		(r.max.x+s-1)/s, (r.max.y+s-1)/s);
-	scr = &vgascreen[0];
 	qlock(&drawlock);
-	lock(&vgascreenlock);
-	m = scr->gscreen;
+	m = kittyscreenlock();
 	if(m == nil || m->chan != XRGB32 || !rectinrect(src, m->r)
 	|| Dx(r) > Maxside || Dy(r) > Maxside){
-		unlock(&vgascreenlock);
+		kittyscreenunlock();
 		qunlock(&drawlock);
 		return -1;
 	}
@@ -524,7 +509,7 @@ snapshot(Rectangle *rp, int *sent, int nsent)
 			}
 		}
 	}
-	unlock(&vgascreenlock);
+	kittyscreenunlock();
 	qunlock(&drawlock);
 	*rp = r;
 	return i;
@@ -702,7 +687,6 @@ kittyresetdev(void)
 static void
 kittyinitdev(void)
 {
-	VGAscr *scr;
 	char *s, *p, *ep;
 
 	if((s = getconf("kittyuart")) == nil)
@@ -749,23 +733,13 @@ kittyinitdev(void)
 	kitty.nx = (kitty.pwidth+Tilesize-1)/Tilesize;
 	kitty.ny = (kitty.pheight+Tilesize-1)/Tilesize;
 
-	scr = &vgascreen[0];
 	qlock(&drawlock);
 	if(waserror()){
 		qunlock(&drawlock);
 		nexterror();
 	}
-	deletescreenimage();
-	scr->dev = &vgakittydev;
-	scr->paddr = 0;
-	scr->vaddr = nil;
-	scr->softscreen = 1;
-	setscreensize(scr, kitty.width, kitty.height, 32, XRGB32, 0);
+	kittyscreeninit(kitty.width, kitty.height);
 	kitty.active = 1;
-	vgascreenwin(scr);
-	scr->cur = &vgasoftcur;
-	vgasoftcur.enable(scr);
-	resetscreenimage();
 	qunlock(&drawlock);
 	poperror();
 

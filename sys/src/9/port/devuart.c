@@ -142,8 +142,19 @@ uartclaim(char *which, char *ctl)
 {
 	Uart *p;
 	char raw[64], *cmd;
+	int i;
 
-	p = uartport(which);
+	p = nil;
+	for(i = 0; i < uartnuart; i++){
+		if(uart[i] == nil || uart[i]->name == nil
+		|| strcmp(uart[i]->name, which) != 0)
+			continue;
+		if(p != nil)
+			error(Ebadarg);
+		p = uart[i];
+	}
+	if(p == nil)
+		p = uartport(which);
 	cmd = nil;
 	if(ctl != nil && *ctl != 0){
 		cmd = smalloc(strlen(ctl)+1);
