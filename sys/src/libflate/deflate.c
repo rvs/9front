@@ -2,6 +2,9 @@
 #include <libc.h>
 #include <flate.h>
 
+extern void _deflateprint(char*, ...);
+#pragma varargck argpos _deflateprint 1
+
 typedef struct Chain	Chain;
 typedef struct Chains	Chains;
 typedef struct Dyncode	Dyncode;
@@ -116,17 +119,6 @@ struct LZstate
 	int	debug;
 };
 
-struct LZblock
-{
-	ushort	parse[DeflateMaxBlock / 2 + 1];
-	int	lastv;				/* value being constucted for parse */
-	ulong	litlencount[Nlitlen];
-	ulong	offcount[Noff];
-	ushort	*eparse;			/* limit for parse table */
-	int	bytes;				/* consumed from the input */
-	int	excost;				/* cost of encoding extra len & off bits */
-};
-
 /*
  * huffman code table
  */
@@ -150,11 +142,53 @@ struct Dyncode
 	uchar	codeaux[Nlitlen+Noff];
 };
 
+struct Chain
+{
+	ulong	count;				/* occurances of everything in the chain */
+	ushort	leaf;				/* leaves to the left of chain, or leaf value */
+	char	col;				/* ref count for collecting unused chains */
+	char	gen;				/* need to generate chains for next lower level */
+	Chain	*up;				/* Chain up in the lists */
+};
+
+struct Chains
+{
+	Chain	*lists[(MaxHuffBits - 1) * 2];
+	ulong	leafcount[MaxLeaf];		/* sorted list of leaf counts */
+	ushort	leafmap[MaxLeaf];		/* map to actual leaf number */
+	int	nleaf;				/* number of leaves */
+	Chain	chains[ChainMem];
+	Chain	*echains;
+	Chain	*free;
+	char	col;
+	int	nlists;
+};
+
+struct LZblock
+{
+	ushort	parse[DeflateMaxBlock / 2 + 1];
+	int	lastv;				/* value being constucted for parse */
+	ulong	litlencount[Nlitlen];
+	ulong	offcount[Noff];
+	ushort	*eparse;			/* limit for parse table */
+	int	bytes;				/* consumed from the input */
+	int	excost;				/* cost of encoding extra len & off bits */
+
+	/* per-call workspace, too large for small stacks */
+	Dyncode	dyncode;
+	Dyncode	hdyncode;
+	Huff	dlitlentab[Nlitlen];
+	Huff	dofftab[Noff];
+	Huff	hlitlentab[Nlitlen];
+	ulong	litcount[Nlitlen];
+	Chains	cs;
+};
+
 static	int	deflateb(LZstate *lz, LZblock *lzb, void *rr, int (*r)(void*, void*, int));
 static	int	lzcomp(LZstate*, LZblock*, uchar*, ushort*, int finish);
 static	void	wrblock(LZstate*, int, ushort*, ushort*, Huff*, Huff*);
 static	int	bitcost(Huff*, ulong*, int);
-static	int	huffcodes(Dyncode*, Huff*, Huff*);
+static	int	huffcodes(Dyncode*, Huff*, Huff*, Chains*);
 static	void	wrdyncode(LZstate*, Dyncode*);
 static	void	lzput(LZstate*, ulong bits, int nbits);
 static	void	lzflushbits(LZstate*);
@@ -162,9 +196,9 @@ static	void	lzflush(LZstate *lz);
 static	void	lzwrite(LZstate *lz, void *buf, int n);
 
 static	int	hufftabinit(Huff*, int, ulong*, int);
-static	int	mkgzprecode(Huff*, ulong *, int, int);
+static	int	mkgzprecode(Huff*, ulong *, int, int, Chains*);
 
-static	int	mkprecode(Huff*, ulong *, int, int, ulong*);
+static	int	mkprecode(Huff*, ulong *, int, int, ulong*, Chains*);
 static	void	nextchain(Chains*, int);
 static	void	leafsort(ulong*, ushort*, int, int);
 
@@ -217,8 +251,14 @@ static	ulong	nmatches;
 int
 deflateinit(void)
 {
+	Chains *cs;
 	ulong bitcount[MaxHuffBits];
-	int i, j, ci, n;
+	int i, j, ci, n, ok;
+
+	cs = malloc(sizeof *cs);
+	if(cs == nil)
+		return FlateNoMem;
+	ok = FlateInternal;
 
 	/* byte reverse table */
 	for(i=0; i<256; i++)
@@ -243,7 +283,7 @@ deflateinit(void)
 	bitcount[8] += Nlitlen - 280;
 
 	if(!hufftabinit(litlentab, Nlitlen, bitcount, 9))
-		return FlateInternal;
+		goto Out;
 
 	/* static offset bit lengths */
 	for(i = 0; i < Noff; i++)
@@ -253,12 +293,12 @@ deflateinit(void)
 	bitcount[5] = Noff;
 
 	if(!hufftabinit(offtab, Noff, bitcount, 5))
-		return FlateInternal;
+		goto Out;
 
 	bitcount[0] = 0;
 	bitcount[1] = 0;
-	if(!mkgzprecode(hofftab, bitcount, 2, MaxHuffBits))
-		return FlateInternal;
+	if(!mkgzprecode(hofftab, bitcount, 2, MaxHuffBits, cs))
+		goto Out;
 
 	/* conversion tables for lens & offs to codes */
 	ci = 0;
@@ -287,7 +327,10 @@ deflateinit(void)
 		for(; ci < n; ci++)
 			bigoffcode[ci] = i;
 	}
-	return FlateOk;
+	ok = FlateOk;
+Out:
+	free(cs);
+	return ok;
 }
 
 static void
@@ -352,13 +395,20 @@ deflate(void *wr, int (*w)(void*, void*, int), void *rr, int (*r)(void*, void*, 
 static int
 deflateb(LZstate *lz, LZblock *lzb, void *rr, int (*r)(void*, void*, int))
 {
-	Dyncode dyncode, hdyncode;
-	Huff dlitlentab[Nlitlen], dofftab[Noff], hlitlentab[Nlitlen];
-	ulong litcount[Nlitlen];
+	Dyncode *dyncode, *hdyncode;
+	Huff *dlitlentab, *dofftab, *hlitlentab;
+	ulong *litcount;
 	long nunc, ndyn, nfix, nhuff;
 	uchar *slop, *hslop;
 	ulong ep;
 	int i, n, m, mm, nslop;
+
+	dyncode = &lzb->dyncode;
+	hdyncode = &lzb->hdyncode;
+	dlitlentab = lzb->dlitlentab;
+	dofftab = lzb->dofftab;
+	hlitlentab = lzb->hlitlentab;
+	litcount = lzb->litcount;
 
 	memset(lzb->litlencount, 0, sizeof lzb->litlencount);
 	memset(lzb->offcount, 0, sizeof lzb->offcount);
@@ -440,18 +490,18 @@ deflateb(LZstate *lz, LZblock *lzb, void *rr, int (*r)(void*, void*, int))
 		return FlateInternal;
 	nunc = lzb->bytes;
 
-	if(!mkgzprecode(dlitlentab, lzb->litlencount, Nlitlen, MaxHuffBits)
-	|| !mkgzprecode(dofftab, lzb->offcount, Noff, MaxHuffBits))
+	if(!mkgzprecode(dlitlentab, lzb->litlencount, Nlitlen, MaxHuffBits, &lzb->cs)
+	|| !mkgzprecode(dofftab, lzb->offcount, Noff, MaxHuffBits, &lzb->cs))
 		return FlateInternal;
 
-	ndyn = huffcodes(&dyncode, dlitlentab, dofftab);
+	ndyn = huffcodes(dyncode, dlitlentab, dofftab, &lzb->cs);
 	if(ndyn < 0)
 		return FlateInternal;
 	ndyn += bitcost(dlitlentab, lzb->litlencount, Nlitlen)
 		+ bitcost(dofftab, lzb->offcount, Noff)
 		+ lzb->excost;
 
-	memset(litcount, 0, sizeof litcount);
+	memset(litcount, 0, sizeof lzb->litcount);
 
 	nslop = nunc;
 	if(nslop > &lz->hist[HistSize] - slop)
@@ -464,9 +514,9 @@ deflateb(LZstate *lz, LZblock *lzb, void *rr, int (*r)(void*, void*, int))
 		litcount[hslop[i]]++;
 	litcount[DeflateEob]++;
 
-	if(!mkgzprecode(hlitlentab, litcount, Nlitlen, MaxHuffBits))
+	if(!mkgzprecode(hlitlentab, litcount, Nlitlen, MaxHuffBits, &lzb->cs))
 		return FlateInternal;
-	nhuff = huffcodes(&hdyncode, hlitlentab, hofftab);
+	nhuff = huffcodes(hdyncode, hlitlentab, hofftab, &lzb->cs);
 	if(nhuff < 0)
 		return FlateInternal;
 	nhuff += bitcost(hlitlentab, litcount, Nlitlen);
@@ -478,9 +528,9 @@ deflateb(LZstate *lz, LZblock *lzb, void *rr, int (*r)(void*, void*, int))
 	lzput(lz, lz->eof && !lz->avail, 1);
 
 	if(lz->debug){
-		fprint(2, "block: bytes=%lud entries=%zd extra bits=%d\n\tuncompressed=%lud fixed=%lud dynamic=%lud huffman=%lud\n",
+		_deflateprint("block: bytes=%lud entries=%zd extra bits=%d\n\tuncompressed=%lud fixed=%lud dynamic=%lud huffman=%lud\n",
 			nunc, lzb->eparse - lzb->parse, lzb->excost, (nunc + 4) * 8, nfix, ndyn, nhuff);
-		fprint(2, "\tnlit=%lud matches=%lud eof=%d\n", nlits, nmatches, lz->eof && !lz->avail);
+		_deflateprint("\tnlit=%lud matches=%lud eof=%d\n", nlits, nmatches, lz->eof && !lz->avail);
 	}
 
 	if((nunc + 4) * 8 < ndyn && (nunc + 4) * 8 < nfix && (nunc + 4) * 8 < nhuff){
@@ -498,13 +548,13 @@ deflateb(LZstate *lz, LZblock *lzb, void *rr, int (*r)(void*, void*, int))
 	}else if(ndyn < nfix && ndyn < nhuff){
 		lzput(lz, DeflateDyn, 2);
 
-		wrdyncode(lz, &dyncode);
+		wrdyncode(lz, dyncode);
 		wrblock(lz, slop - lz->hist, lzb->parse, lzb->eparse, dlitlentab, dofftab);
 		lzput(lz, dlitlentab[DeflateEob].encode, dlitlentab[DeflateEob].bits);
 	}else if(nhuff < nfix){
 		lzput(lz, DeflateDyn, 2);
 
-		wrdyncode(lz, &hdyncode);
+		wrdyncode(lz, hdyncode);
 
 		m = 0;
 		for(i = nunc; i > MaxLitRun; i -= MaxLitRun)
@@ -588,7 +638,7 @@ wrblock(LZstate *out, int litoff, ushort *soff, ushort *eoff, Huff *litlentab, H
 				for(i = 0; i < run; i++){
 					lit = out->hist[litoff & (HistBlock - 1)];
 					litoff++;
-					fprint(2, "\tlit %.2ux %c\n", lit, lit);
+					_deflateprint("\tlit %.2ux %c\n", lit, lit);
 				}
 				if(!(offset & LenFlag))
 					continue;
@@ -602,7 +652,7 @@ wrblock(LZstate *out, int litoff, ushort *soff, ushort *eoff, Huff *litlentab, H
 				offset >>= LenShift;
 			}
 			litoff += len + MinMatch;
-			fprint(2, "\t<%d, %d>\n", offset + 1, len + MinMatch);
+			_deflateprint("\t<%d, %d>\n", offset + 1, len + MinMatch);
 		}
 	}
 
@@ -906,7 +956,7 @@ lzcomp(LZstate *lz, LZblock *lzb, uchar *ep, ushort *parse, int finish)
  * needed to transmit them.
  */
 static int
-huffcodes(Dyncode *dc, Huff *littab, Huff *offtab)
+huffcodes(Dyncode *dc, Huff *littab, Huff *offtab, Chains *cs)
 {
 	Huff *codetab;
 	uchar *codes, *codeaux;
@@ -980,7 +1030,7 @@ huffcodes(Dyncode *dc, Huff *littab, Huff *offtab)
 	memset(codecount, 0, sizeof codecount);
 	for(i = 0; i < c; i++)
 		codecount[codes[i]]++;
-	if(!mkgzprecode(codetab, codecount, Nclen, 8))
+	if(!mkgzprecode(codetab, codecount, Nclen, 8, cs))
 		return -1;
 
 	for(nclen = Nclen; nclen > 4 && codetab[clenorder[nclen-1]].bits == 0; nclen--)
@@ -1043,12 +1093,12 @@ bitcost(Huff *tab, ulong *count, int n)
 }
 
 static int
-mkgzprecode(Huff *tab, ulong *count, int n, int maxbits)
+mkgzprecode(Huff *tab, ulong *count, int n, int maxbits, Chains *cs)
 {
 	ulong bitcount[MaxHuffBits];
 	int i, nbits;
 
-	nbits = mkprecode(tab, count, n, maxbits, bitcount);
+	nbits = mkprecode(tab, count, n, maxbits, bitcount, cs);
 	for(i = 0; i < n; i++){
 		if(tab[i].bits == -1)
 			tab[i].bits = 0;
@@ -1095,32 +1145,6 @@ hufftabinit(Huff *tab, int n, ulong *bitcount, int nbits)
 	return 1;
 }
 
-
-/*
- * this should be in a library
- */
-struct Chain
-{
-	ulong	count;				/* occurances of everything in the chain */
-	ushort	leaf;				/* leaves to the left of chain, or leaf value */
-	char	col;				/* ref count for collecting unused chains */
-	char	gen;				/* need to generate chains for next lower level */
-	Chain	*up;				/* Chain up in the lists */
-};
-
-struct Chains
-{
-	Chain	*lists[(MaxHuffBits - 1) * 2];
-	ulong	leafcount[MaxLeaf];		/* sorted list of leaf counts */
-	ushort	leafmap[MaxLeaf];		/* map to actual leaf number */
-	int	nleaf;				/* number of leaves */
-	Chain	chains[ChainMem];
-	Chain	*echains;
-	Chain	*free;
-	char	col;
-	int	nlists;
-};
-
 /*
  * fast, low space overhead algorithm for max depth huffman type codes
  *
@@ -1131,9 +1155,8 @@ struct Chains
  * pp 12-21, Springer Verlag, New York, 1995.
  */
 static int
-mkprecode(Huff *tab, ulong *count, int n, int maxbits, ulong *bitcount)
+mkprecode(Huff *tab, ulong *count, int n, int maxbits, ulong *bitcount, Chains *cs)
 {
-	Chains cs;
 	Chain *c;
 	int i, m, em, bits;
 
@@ -1145,57 +1168,58 @@ mkprecode(Huff *tab, ulong *count, int n, int maxbits, ulong *bitcount)
 		tab[i].bits = -1;
 		tab[i].encode = 0;
 		if(count[i] != 0){
-			cs.leafcount[m] = count[i];
-			cs.leafmap[m] = i;
+			cs->leafcount[m] = count[i];
+			cs->leafmap[m] = i;
 			m++;
 		}
 	}
 	if(m < 2){
 		if(m != 0){
-			tab[cs.leafmap[0]].bits = 0;
+			tab[cs->leafmap[0]].bits = 0;
 			bitcount[0] = 1;
 		}else
 			bitcount[0] = 0;
 		return 0;
 	}
-	cs.nleaf = m;
-	leafsort(cs.leafcount, cs.leafmap, 0, m);
+	cs->nleaf = m;
+	leafsort(cs->leafcount, cs->leafmap, 0, m);
 
 	for(i = 0; i < m; i++)
-		cs.leafcount[i] = count[cs.leafmap[i]];
+		cs->leafcount[i] = count[cs->leafmap[i]];
 
 	/*
-	 * set up free list
+	 * set up free list, discarding old collection marks in the workspace
 	 */
-	cs.free = &cs.chains[2];
-	cs.echains = &cs.chains[ChainMem];
-	cs.col = 1;
+	memset(cs->chains, 0, sizeof cs->chains);
+	cs->free = &cs->chains[2];
+	cs->echains = &cs->chains[ChainMem];
+	cs->col = 1;
 
 	/*
 	 * initialize chains for each list
 	 */
-	c = &cs.chains[0];
-	c->count = cs.leafcount[0];
+	c = &cs->chains[0];
+	c->count = cs->leafcount[0];
 	c->leaf = 1;
-	c->col = cs.col;
+	c->col = cs->col;
 	c->up = nil;
 	c->gen = 0;
-	cs.chains[1] = cs.chains[0];
-	cs.chains[1].leaf = 2;
-	cs.chains[1].count = cs.leafcount[1];
+	cs->chains[1] = cs->chains[0];
+	cs->chains[1].leaf = 2;
+	cs->chains[1].count = cs->leafcount[1];
 	for(i = 0; i < maxbits-1; i++){
-		cs.lists[i * 2] = &cs.chains[0];
-		cs.lists[i * 2 + 1] = &cs.chains[1];
+		cs->lists[i * 2] = &cs->chains[0];
+		cs->lists[i * 2 + 1] = &cs->chains[1];
 	}
 
-	cs.nlists = 2 * (maxbits - 1);
+	cs->nlists = 2 * (maxbits - 1);
 	m = 2 * m - 2;
 	for(i = 2; i < m; i++)
-		nextchain(&cs, cs.nlists - 2);
+		nextchain(cs, cs->nlists - 2);
 
 	bits = 0;
-	bitcount[0] = cs.nleaf;
-	for(c = cs.lists[cs.nlists - 1]; c != nil; c = c->up){
+	bitcount[0] = cs->nleaf;
+	for(c = cs->lists[cs->nlists - 1]; c != nil; c = c->up){
 		m = c->leaf;
 		bitcount[bits++] -= m;
 		bitcount[bits] = m;
@@ -1203,7 +1227,7 @@ mkprecode(Huff *tab, ulong *count, int n, int maxbits, ulong *bitcount)
 	m = 0;
 	for(i = bits; i >= 0; i--)
 		for(em = m + bitcount[i]; m < em; m++)
-			tab[cs.leafmap[m]].bits = i;
+			tab[cs->leafmap[m]].bits = i;
 
 	return bits;
 }
@@ -1353,7 +1377,8 @@ leafsort(ulong *leafcount, ushort *leafmap, int a, int n)
 		j = pj - a;
 
 		n = n-j-1;
-		if(j >= n){
+		/* recurse on the smaller partition to bound stack use */
+		if(j <= n){
 			leafsort(leafcount, leafmap, a, j);
 			a += j+1;
 		}else{
