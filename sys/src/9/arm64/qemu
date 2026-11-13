@@ -43,6 +43,7 @@ ip
 misc
 	gic
 	uartqemu
+	uartvcon	pci virtio10mem
 	sdvirtio10	pci sdscsi virtio10mem
 port
 	int cpuserver = 0;
