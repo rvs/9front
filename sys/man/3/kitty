@@ -64,6 +64,17 @@ and userland:
 boot/qemu -amd64 -kitty
 .EE
 .PP
+The launcher probes hardware acceleration when the host and guest
+architectures are compatible:
+KVM on Linux, Hypervisor.framework on macOS, WHPX on Windows,
+and NVMM on NetBSD.
+It initializes a paused machine to check that the accelerator and
+required CPU and interrupt-controller configuration are usable,
+then reports the selected backend before booting the guest.
+If the probe fails, or the architectures differ, it uses TCG software emulation.
+RISC-V uses TCG because its current raw kernel boot requires the
+space reserved by OpenSBI below the kernel.
+.PP
 For HiDPI scaling, use
 .B -x
 with
