@@ -26,11 +26,18 @@ jobs:
       - name: Install QEMU
         run: |
           sudo apt-get update -q
-          sudo apt-get install -qy --no-install-recommends ${{ matrix.packages }} expect acl
+          sudo apt-get install -qy --no-install-recommends ${{ matrix.packages }} expect
 
       - name: Enable KVM
         if: matrix.arch == '386' || matrix.arch == 'amd64'
-        run: sudo setfacl -m "u:$(id -un):rw" /dev/kvm
+        run: |
+          if [ -e /dev/kvm ]; then
+            echo "KERNEL==\"kvm\", OWNER=\"$(id -u)\", MODE=\"0600\"" | sudo tee /etc/udev/rules.d/99-kvm.rules
+            sudo udevadm control --reload-rules
+            sudo udevadm trigger --name-match=kvm
+            sudo udevadm settle
+            test -r /dev/kvm && test -w /dev/kvm
+          fi
 
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:

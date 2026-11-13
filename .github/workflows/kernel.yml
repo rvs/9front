@@ -30,9 +30,14 @@ jobs:
       - name: Install QEMU and enable KVM
         run: |
           sudo apt-get update -q
-          sudo apt-get install -qy --no-install-recommends qemu-system-x86 acl gh
-          sudo setfacl -m "u:$(id -un):rw" /dev/kvm
-          test -r /dev/kvm && test -w /dev/kvm
+          sudo apt-get install -qy --no-install-recommends qemu-system-x86 gh
+          if [ -e /dev/kvm ]; then
+            echo "KERNEL==\"kvm\", OWNER=\"$(id -u)\", MODE=\"0600\"" | sudo tee /etc/udev/rules.d/99-kvm.rules
+            sudo udevadm control --reload-rules
+            sudo udevadm trigger --name-match=kvm
+            sudo udevadm settle
+            test -r /dev/kvm && test -w /dev/kvm
+          fi
 
       - name: Fetch amd64 bootstrap from latest release
         env:
