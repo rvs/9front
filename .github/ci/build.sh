@@ -12,12 +12,13 @@ mkdir .ci
 tar -xf "$seed"
 mv amd64/9pc64cpuwait .ci/kernel
 chmod -R u+rwX amd64/bin amd64/lib amd64/init
-mkdir -p {bin,dev,env,fd,mnt,net,n,proc,root,srv,shr,tmp}
+mkdir -p {bin,dev,env,fd,mnt,net,n,proc,root,srv,shr,tmp,lib/ndb}
 mkdir -p rc/bin/postscript usr/glenda/tmp usr/glenda/batch "acme/bin/$arch" "sys/lib/dist/bin/$arch"
 while IFS= read -r dir; do
 	mkdir -p "$arch/${dir#amd64/}"
 done < <(find amd64/bin amd64/lib -type d)
-cp adm/timezone/GMT adm/timezone/local
+cp -R sys/lib/dist/ndb/. lib/ndb/
+cp adm/timezone/US_Pacific adm/timezone/local
 printf 'service=batch\n' >rc/bin/termrc
 printf '%s\n' "$arch" >.ci/target
 printf '%s\n' \
@@ -59,5 +60,5 @@ for f in mkwnew spout winfs News Wiki; do
 done
 
 tar --exclude="$arch/include" --exclude="$arch/mkfile" -czf ".ci/$arch.tar.gz" \
-	"$arch" "acme/bin/$arch" "sys/lib/dist/bin/$arch"
+	"$arch" "acme/bin/$arch" "sys/lib/dist/bin/$arch" lib/ndb adm/timezone/local
 echo "$arch: PASS .ci/$arch.tar.gz"
