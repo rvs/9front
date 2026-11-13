@@ -3,6 +3,7 @@
 LIB=/$objtype/lib/libflate.a
 OFILES=\
 	deflate.$O\
+	deflateprint.$O\
 	deflatezlib.$O\
 	deflateblock.$O\
 	deflatezlibblock.$O\
