@@ -120,6 +120,7 @@ misc
 	uarti8250
 	uartisa
 	uartpci		pci
+	uartvcon	pci virtio10pc
 
 	vgasoft		=cur swcursor
 	vga3dfx		+cur
