@@ -11,7 +11,7 @@ kitty \- serial terminal graphics and input
 .SH DESCRIPTION
 The
 .I kitty
-device uses a dedicated serial port to display the kernel screen
+device uses a dedicated byte stream to display the kernel screen
 in a terminal supporting the Kitty graphics protocol.
 It provides a software framebuffer for the ordinary
 .IR draw (3)
@@ -23,6 +23,9 @@ The device is currently included in the
 and
 .B pc64
 kernels.
+Rebuild and install
+.B /sys/src/libflate
+for the target architecture before linking these kernels.
 .PP
 Set
 .BI kittyuart= n
@@ -30,8 +33,9 @@ and
 .B monitor=kitty
 in the kernel configuration.
 The numbered UART must not be the serial console or already open.
-It is reserved until reboot and configured for 115200 baud,
-eight data bits, one stop bit, no parity, and no flow control.
+It is reserved until reboot and configured for eight data bits,
+one stop bit, no parity, and no flow control.
+Physical UARTs run at 115200 baud.
 Ordinary reads and writes to its
 .B eia
 and
@@ -46,11 +50,13 @@ QEMU can connect the serial port directly to a terminal, socket,
 or pseudoterminal.
 The checkout's
 .B boot/qemu
-launcher selects a second serial port for graphics with
+launcher selects a modern virtio-serial generic port for graphics with
 .BR -kitty ;
-the first port's console output defaults to
+COM1 console output defaults to
 .B .qemu.console.log
 in the exported root.
+COM2 is connected to a null backend to keep UART numbering stable;
+the graphics stream is UART 2.
 For example, from a Kitty-compatible terminal with a built kernel
 and userland:
 .IP
@@ -58,7 +64,41 @@ and userland:
 boot/qemu -amd64 -kitty
 .EE
 .PP
+The
+.B uartvcon
+transport in the
+.B pc
+and
+.B pc64
+kernels supports only generic port 1 of a modern PCI virtio-serial
+controller with memory-mapped capabilities and the multiport feature.
+The launcher supplies this controller and a
+.B virtserialport
+connected directly to terminal standard input and output.
+It does not use
+.BR virtconsole ,
+which may discard output under backpressure.
+The transport has eight 8192-byte receive buffers and one
+8192-byte transmit buffer.
+Completed receive buffers are retained until the input queue has room.
+Baud settings do not limit virtual transport speed.
+There is no modem signalling, serial-console polling, port discovery,
+or hotplug support.
+Closing the UART resets the entire controller before another open;
+do not attach other ports to it.
+Closing can discard the last transmit buffer if the host has not consumed it.
+.PP
+.B -kitty-uart
+instead connects COM2 to terminal standard input and output and
+selects UART 1, as needed by kernels without
+.BR uartvcon .
+For a physical connection, configure
+.B kittyuart
+with the appropriate UART number instead of using the launcher.
+.PP
 .B -kitty
+and
+.B -kitty-uart
 cannot be combined with
 .B -vga
 or
@@ -83,17 +123,34 @@ Do not reconfigure this screen using
 .PP
 Dirty, cell-aligned tiles are copied out of the framebuffer,
 converted to RGB, and transmitted in bounded inline base64 chunks.
+Each tile is compressed with level-1 zlib only if that reduces its size.
+Incompressible tiles are sent uncompressed.
 Encoding, serial writes, and acknowledgement waits occur in a
 separate kernel process, never in a drawing or interrupt callback.
-Only one tile awaits a terminal status response at a time.
+By default up to eight distinct tiles are sent before waiting for one
+terminal status response.
 Damage is coalesced while the terminal is slow.
 After five seconds without an acknowledgement, transmission stops.
 .B Kittyctl
 reports the connection status, screen and cell dimensions,
 and transmission and input counters.
+It also reports the compression setting, compressed tile count,
+raw and transmitted pixel payload bytes, batch limit, and batch count.
 Writing
 .B redraw
 restarts negotiation and requests a full repaint.
+Writing
+.B compress 0
+or
+.B compress 1
+disables or enables compression.
+Writing
+.B batch
+followed by a number from 1 to 16 sets the maximum tiles per acknowledgement.
+These settings apply to subsequent transmissions;
+write
+.B redraw
+to repaint an unchanged screen with the new settings.
 .PP
 .B Kbd
 is an exclusive-reader stream of complete, NUL-terminated keyboard
@@ -123,6 +180,9 @@ Screen, UART, and device integration.
 .B /sys/src/9/pc/vgakitty.c
 VGA framebuffer flush adapter.
 .TP
+.B /sys/src/9/pc/uartvcon.c
+Fixed-port virtio-serial transport.
+.TP
 .B /sys/src/9/port/kitty.c
 Terminal input parser.
 .TP
@@ -136,7 +196,7 @@ Parser interface.
 .IR kbdfs (8),
 .IR rio (1)
 .SH LIMITATIONS
-This is a prototype for PC serial connections.
+Only PC screen and transport adapters are provided.
 It does not use shared memory, compressed graphics, frame editing,
 OSC 52 clipboard synchronization, or audio.
 Raw RGB over a real 115200-baud link is slow.

@@ -12,6 +12,7 @@ cpuwait=false
 net=true
 vga=false
 kitty=false
+kittyuart=false
 
 while [ $# -gt 0 ]; do
 	case "$1" in
@@ -23,9 +24,10 @@ while [ $# -gt 0 ]; do
 	-nonet)		net=false ;;
 	-smp)		smp=$2; shift ;;
 	-vga)		vga=true ;;
-	-kitty)		kitty=true ;;
+	-kitty)		kitty=true; kittyuart=false ;;
+	-kitty-uart)	kitty=true; kittyuart=true ;;
 	*)
-		echo 'usage: boot/qemu [-386 | -amd64 | -arm64 | -riscv64] [-cpuwait] [-nonet] [-smp n] [-vga | -kitty]' >&2
+		echo 'usage: boot/qemu [-386 | -amd64 | -arm64 | -riscv64] [-cpuwait] [-nonet] [-smp n] [-vga | -kitty | -kitty-uart]' >&2
 		exit 1
 		;;
 	esac
@@ -60,7 +62,11 @@ if $kitty; then
 		exit 1
 	fi
 	serial=${SERIAL:-file:$root/.qemu.console.log}
-	append="$append kittyuart=1 monitor=kitty"
+	if $kittyuart; then
+		append="$append kittyuart=1 monitor=kitty"
+	else
+		append="$append kittyuart=2 monitor=kitty"
+	fi
 fi
 kernel=${KERNEL:-$root/$arch/$base}
 gfx=(-display none)
@@ -79,7 +85,15 @@ args=(-m "$mem" -smp "$smp" "${gfx[@]}" -monitor none -serial "$serial" -no-rebo
 args+=(-drive "file=$PWD/boot/cpu.nvram,if=none,id=nvram,format=raw,readonly=on"
 	-device virtio-blk-pci,drive=nvram,disable-legacy=on)
 if $kitty; then
-	args+=(-serial stdio)
+	if $kittyuart; then
+		args+=(-serial stdio)
+	else
+		# Keep both ISA UARTs present so the new port is eia2.
+		args+=(-serial null
+			-chardev stdio,id=kitty,signal=off
+			-device virtio-serial-pci,id=kittyserial,disable-legacy=on,max_ports=2
+			-device virtserialport,bus=kittyserial.0,chardev=kitty,nr=1,name=org.9front.kitty)
+	fi
 fi
 
 case $arch in

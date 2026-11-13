@@ -86,6 +86,7 @@ kittyinit(Kitty *k, void *arg)
 {
 	memset(k, 0, sizeof *k);
 	k->arg = arg;
+	k->query = Kittyquery;
 }
 
 static Rune
@@ -468,7 +469,7 @@ string(Kitty *k)
 		if(*s == ',')
 			s++;
 	}
-	if(id == Kittyquery && *s == ';')
+	if(id == k->query && *s == ';')
 		reply(k, Kittygraphics, strcmp(s+1, "OK") == 0);
 }
 

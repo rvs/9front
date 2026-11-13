@@ -10,6 +10,7 @@
 #include <draw.h>
 #include <memdraw.h>
 #include <cursor.h>
+#include <flate.h>
 #include "screen.h"
 #include "../port/kitty.h"
 
@@ -23,6 +24,7 @@ enum {
 	Firstimage = 1001,
 
 	Chunk = 3072,
+	Maxbatch = 16,
 
 	Qdir = 0,
 	Qkbd,
@@ -39,6 +41,10 @@ static struct {
 	int	active;
 	int	ready;
 	int	probe;
+	int	probewait;
+	int	quiet;
+	int	query;
+	ulong	generation;
 	int	keyboard;
 	int	keymode;
 	int	resize;
@@ -60,7 +66,14 @@ static struct {
 	int	next;
 	uchar	dirty[Maxtiles];
 	uchar	*pixels;
+	uchar	*packed;
 	char	*encoded;
+	int	compress;
+	int	batch;
+	ulong	ztiles;
+	ulong	batches;
+	uvlong	rawbytes;
+	uvlong	packedbytes;
 	ulong	tiles;
 	uvlong	bytes;
 	ulong	keys;
@@ -106,12 +119,26 @@ kittyflush(VGAscr*, Rectangle r)
 	wakeup(&kitty.r);
 }
 
+static int
+inputquiet(void)
+{
+	int quiet;
+
+	ilock(&kitty);
+	quiet = kitty.quiet;
+	iunlock(&kitty);
+	return quiet;
+}
+
 static void
 kittykey(void*, Rune r, int down)
 {
 	char msg[UTFmax+2];
 	int n;
 
+	/* releases from the old parser must still reach kbdfs */
+	if(down && inputquiet())
+		return;
 	msg[0] = down ? 'r' : 'R';
 	n = 1+runetochar(msg+1, &r);
 	msg[n++] = 0;
@@ -126,6 +153,8 @@ kittytext(void*, Rune r)
 	char msg[UTFmax+2];
 	int n;
 
+	if(inputquiet())
+		return;
 	msg[0] = 'c';
 	n = 1+runetochar(msg+1, &r);
 	msg[n++] = 0;
@@ -139,6 +168,8 @@ kittymouse(void*, int x, int y, int buttons, int pixel)
 {
 	int cw, ch;
 
+	if(buttons != 0 && inputquiet())
+		return;
 	ilock(&kitty);
 	cw = kitty.cellw;
 	ch = kitty.cellh;
@@ -190,13 +221,18 @@ kittyreply(void*, int kind, int value)
 	ilock(&kitty);
 	switch(kind){
 	case Kittyack:
-		kitty.ack = 0;
+		if(kitty.ready)
+			kitty.ack = 0;
 		break;
 	case Kittygraphics:
-		kitty.ready = value;
-		kitty.status = value ? "ready" : "graphics unsupported";
-		if(value)
-			alltiles();
+		if(kitty.probewait && kitty.input.query == kitty.query){
+			kitty.probewait = 0;
+			kitty.quiet = 0;
+			kitty.ready = value;
+			kitty.status = value ? "ready" : "graphics unsupported";
+			if(value)
+				alltiles();
+		}
 		break;
 	case Kittykeyboard:
 		kitty.input.keyboard = 1;
@@ -220,9 +256,10 @@ static void
 kittyin(void*)
 {
 	uchar buf[1024];
-	int n, idle, reset;
+	int n, reset, query;
+	ulong lastinput;
 
-	idle = 0;
+	lastinput = now();
 	for(;;){
 		if(waserror()){
 			tsleep(&up->sleep, return0, nil, 100);
@@ -231,25 +268,26 @@ kittyin(void*)
 		ilock(&kitty);
 		reset = kitty.reset;
 		kitty.reset = 0;
+		query = kitty.query;
 		iunlock(&kitty);
 		if(reset){
 			kittyreset(&kitty.input);
 			kitty.input.keyboard = 0;
+			kitty.input.query = query;
 			/* fresh replies must arrive after the parser is reset */
 			ilock(&kitty);
-			kitty.probe = 1;
+			if(query == kitty.query && !kitty.reset)
+				kitty.probe = 1;
 			iunlock(&kitty);
 			wakeup(&kitty.r);
 		}
 		if((n = qconsume(kitty.uart->iq, buf, sizeof buf)) > 0){
 			kittyinput(&kitty.input, buf, n);
-			idle = 0;
+			lastinput = now();
 		}else{
-			tsleep(&up->sleep, inputready, nil, 10);
-			if((idle += 10) >= 50){
+			if(now()-lastinput >= 50)
 				kittytick(&kitty.input);
-				idle = 0;
-			}
+			tsleep(&up->sleep, inputready, nil, 2);
 		}
 		poperror();
 	}
@@ -283,15 +321,22 @@ deleteimages(int n)
 }
 
 static void
-probe(void)
+probe(int query)
 {
 	char buf[256];
 
+	ilock(&kitty);
+	if(query != kitty.query || kitty.reset){
+		iunlock(&kitty);
+		return;
+	}
+	kitty.probewait = 1;
+	iunlock(&kitty);
 	snprint(buf, sizeof buf, "\033[?1049h\033[?25l\033[?7l"
 		"\033[?1003h\033[?1006h\033[?1016h"
 		"\033[?1004h\033[?2004h\033[?2048h"
 		"\033[14t\033[16t\033[18t\033[?u\033[?1016$p"
-		"\033_Ga=q,i=%d,s=1,v=1,f=24,t=d;AAAA\033\\", Kittyquery);
+		"\033_Ga=q,i=%d,s=1,v=1,f=24,t=d;AAAA\033\\", query);
 	puts(buf);
 }
 
@@ -358,7 +403,8 @@ work(void*)
 	int i, yes;
 
 	ilock(&kitty);
-	yes = kitty.probe || kitty.resize || (kitty.keyboard && !kitty.keymode);
+	yes = kitty.probe || (kitty.resize && !kitty.ack)
+		|| (kitty.keyboard && !kitty.keymode);
 	if(!yes && kitty.ready && !kitty.ack){
 		for(i=0; i<kitty.nx*kitty.ny; i++)
 			if(kitty.dirty[i]){
@@ -371,24 +417,29 @@ work(void*)
 }
 
 static int
-snapshot(Rectangle *rp)
+snapshot(Rectangle *rp, int *sent, int nsent)
 {
 	VGAscr *scr;
 	Memimage *m;
 	Rectangle r;
 	uchar *p, *q;
-	int i, j, n, x, y;
+	int i, j, k, n, x, y;
 
 	ilock(&kitty);
 	n = kitty.nx*kitty.ny;
 	i = kitty.next;
 	for(j=0; j<n; j++){
-		if(kitty.dirty[i])
-			break;
+		if(kitty.dirty[i]){
+			for(k=0; k<nsent; k++)
+				if(sent[k] == i)
+					break;
+			if(k == nsent)
+				break;
+		}
 		if(++i == n)
 			i = 0;
 	}
-	if(j == n || !kitty.ready || kitty.ack){
+	if(j == n || !kitty.ready || kitty.ack || kitty.resize || kitty.reset){
 		iunlock(&kitty);
 		return -1;
 	}
@@ -452,25 +503,39 @@ sendtile(int id, Rectangle r)
 {
 	char buf[192];
 	uchar *p;
-	int n, m, first, cw, ch;
+	int n, m, raw, z, first, cw, ch, compress;
 
 	ilock(&kitty);
 	cw = kitty.cellw;
 	ch = kitty.cellh;
-	kitty.ack = 1;
-	kitty.acktime = now();
+	compress = kitty.compress;
+	iunlock(&kitty);
+	p = kitty.pixels;
+	raw = n = Dx(r)*Dy(r)*3;
+	z = 0;
+	if(compress){
+		m = deflatezlibblock(kitty.packed, n-1, p, n, 1, 0);
+		if(m > 0 && m < n){
+			p = kitty.packed;
+			n = m;
+			z = 1;
+		}
+	}
+	ilock(&kitty);
+	kitty.rawbytes += raw;
+	kitty.packedbytes += n;
+	kitty.ztiles += z;
 	iunlock(&kitty);
 	snprint(buf, sizeof buf, "\033[%d;%dH", r.min.y/ch+1, r.min.x/cw+1);
 	puts(buf);
-	p = kitty.pixels;
-	n = Dx(r)*Dy(r)*3;
+
 	first = 1;
 	while(n > 0){
 		m = n > Chunk ? Chunk : n;
 		if(first){
 			snprint(buf, sizeof buf,
-				"\033_Ga=T,t=d,f=24,i=%d,p=1,s=%d,v=%d,C=1,q=2,m=%d;",
-				Firstimage+id, Dx(r), Dy(r), n>m);
+				"\033_Ga=T,t=d,f=24,i=%d,p=1,s=%d,v=%d,C=1,q=2,%sm=%d;",
+				Firstimage+id, Dx(r), Dy(r), z ? "o=z," : "", n>m);
 			first = 0;
 		}else
 			snprint(buf, sizeof buf, "\033_Gm=%d;", n>m);
@@ -480,11 +545,8 @@ sendtile(int id, Rectangle r)
 		p += m;
 		n -= m;
 	}
-	puts("\033[5n");
 	ilock(&kitty);
 	kitty.tiles++;
-	/* measure acknowledgement time from the end of a slow write */
-	kitty.acktime = now();
 	iunlock(&kitty);
 }
 
@@ -492,14 +554,16 @@ static void
 kittyout(void*)
 {
 	Rectangle r;
-	int id, doprobe, keymode;
-	ulong queried;
+	int id, doprobe, keymode, query, batch, n, sent[Maxbatch], fence;
+	ulong queried, generation;
 
 	queried = now();
 	for(;;){
 		if(waserror()){
 			ilock(&kitty);
 			kitty.ready = 0;
+			kitty.ack = 0;
+			kitty.probewait = 0;
 			kitty.status = "output error";
 			iunlock(&kitty);
 			tsleep(&kitty.r, return0, nil, 1000);
@@ -512,7 +576,7 @@ kittyout(void*)
 			kitty.ready = 0;
 			kitty.status = "acknowledgement timeout; write redraw to retry";
 		}
-		doprobe = kitty.probe;
+		doprobe = kitty.probe && !kitty.reset;
 		kitty.probe = 0;
 		keymode = 0;
 		if(doprobe){
@@ -523,12 +587,15 @@ kittyout(void*)
 			keymode = 1;
 			kitty.keymode = 1;
 		}
-		id = kitty.resize;
+		id = kitty.resize && !kitty.ack;
+		query = kitty.query;
+		batch = kitty.batch;
+		generation = kitty.generation;
 		iunlock(&kitty);
 		if(keymode < 0)
 			puts("\033[<u");
 		if(doprobe)
-			probe();
+			probe(query);
 		/* older terminals do not report resizes in band */
 		if(now()-queried > 2000){
 			puts("\033[14t\033[16t\033[18t");
@@ -538,8 +605,31 @@ kittyout(void*)
 			puts("\033[>31u");
 		if(id)
 			resize();
-		if((id = snapshot(&r)) >= 0)
+		for(n=0; n<batch; n++){
+			if((id = snapshot(&r, sent, n)) < 0)
+				break;
+			sent[n] = id;
 			sendtile(id, r);
+		}
+		fence = 0;
+		if(n > 0){
+			ilock(&kitty);
+			if(kitty.ready && !kitty.reset && generation == kitty.generation){
+				kitty.ack = 1;
+				kitty.acktime = now();
+				kitty.batches++;
+				fence = 1;
+			}
+			iunlock(&kitty);
+		}
+		if(fence){
+			puts("\033[5n");
+			ilock(&kitty);
+			/* a fast reply may already have cleared the fence */
+			if(kitty.ack && generation == kitty.generation)
+				kitty.acktime = now();
+			iunlock(&kitty);
+		}
 		poperror();
 	}
 }
@@ -570,7 +660,14 @@ kittyinitdev(void)
 		return;
 	}
 	kitty.pixels = smalloc(Maxside*Maxside*3);
+	kitty.packed = smalloc(Maxside*Maxside*3);
 	kitty.encoded = smalloc(Chunk/3*4);
+	if(deflateinit() != FlateOk)
+		error("kitty compression initialization");
+	kitty.compress = 1;
+	kitty.batch = 8;
+	kitty.quiet = 1;
+	kitty.query = Kittyquery;
 	kitty.uart = uartclaim(s, nil);
 	kittyinit(&kitty.input, nil);
 	kitty.input.key = kittykey;
@@ -662,7 +759,7 @@ kittyclose(Chan *c)
 static long
 kittyread(Chan *c, void *a, long n, vlong off)
 {
-	char buf[384];
+	char buf[512];
 
 	switch((ulong)c->qid.path){
 	case Qdir:
@@ -674,9 +771,12 @@ kittyread(Chan *c, void *a, long n, vlong off)
 	case Qctl:
 		ilock(&kitty);
 		snprint(buf, sizeof buf, "%s\nsize %dx%d cell %dx%d\n"
-			"tiles %lud bytes %llud keys %lud dropped %lud\n",
+			"tiles %lud bytes %llud keys %lud dropped %lud\n"
+			"compress %d ztiles %lud raw %llud packed %llud batch %d groups %lud\n",
 			kitty.status, kitty.width, kitty.height, kitty.cellw, kitty.cellh,
-			kitty.tiles, kitty.bytes, kitty.keys, kitty.dropped);
+			kitty.tiles, kitty.bytes, kitty.keys, kitty.dropped,
+			kitty.compress, kitty.ztiles, kitty.rawbytes, kitty.packedbytes,
+			kitty.batch, kitty.batches);
 		iunlock(&kitty);
 		return readstr(off, a, n, buf);
 	}
@@ -687,6 +787,8 @@ static long
 kittywrite(Chan *c, void *a, long n, vlong)
 {
 	Cmdbuf *cb;
+	char *ep;
+	int batch;
 
 	if(c->qid.path != Qctl)
 		error(Egreg);
@@ -695,15 +797,34 @@ kittywrite(Chan *c, void *a, long n, vlong)
 		free(cb);
 		nexterror();
 	}
-	if(cb->nf != 1 || strcmp(cb->f[0], "redraw") != 0)
+	if(cb->nf == 1 && strcmp(cb->f[0], "redraw") == 0){
+		ilock(&kitty);
+		kitty.ready = 0;
+		kitty.ack = 0;
+		kitty.probe = kitty.probewait = 0;
+		kitty.quiet = 1;
+		kitty.reset = 1;
+		if(--kitty.query < 0x40000000)
+			kitty.query = Kittyquery;
+		kitty.generation++;
+		kitty.status = "negotiating";
+		alltiles();
+		iunlock(&kitty);
+	}else if(cb->nf == 2 && strcmp(cb->f[0], "compress") == 0){
+		if(strcmp(cb->f[1], "0") != 0 && strcmp(cb->f[1], "1") != 0)
+			error(Ebadctl);
+		ilock(&kitty);
+		kitty.compress = cb->f[1][0]-'0';
+		iunlock(&kitty);
+	}else if(cb->nf == 2 && strcmp(cb->f[0], "batch") == 0){
+		batch = strtol(cb->f[1], &ep, 10);
+		if(*cb->f[1] == 0 || *ep != 0 || batch < 1 || batch > Maxbatch)
+			error(Ebadctl);
+		ilock(&kitty);
+		kitty.batch = batch;
+		iunlock(&kitty);
+	}else
 		error(Ebadctl);
-	ilock(&kitty);
-	kitty.ready = 0;
-	kitty.ack = 0;
-	kitty.reset = 1;
-	kitty.status = "negotiating";
-	alltiles();
-	iunlock(&kitty);
 	wakeup(&kitty.r);
 	poperror();
 	free(cb);

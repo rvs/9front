@@ -25,7 +25,7 @@ dev
 	draw		screen vga vgax vgasoft
 	mouse		mouse
 	vga		pci
-	kitty		kitty
+	kitty		kitty flate
 
 	sd
 #	floppy		dma
@@ -120,6 +120,7 @@ misc
 	uarti8250
 	uartisa
 	uartpci		pci
+	uartvcon	pci virtio10pc
 
 	vgasoft		=cur swcursor
 	vgakitty

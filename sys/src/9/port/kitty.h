@@ -18,6 +18,7 @@ struct Kitty {
 	void	(*reply)(void*, int, int);
 
 	int	pixel;		/* mouse reports use zero-origin pixels */
+	int	query;		/* outstanding graphics query identifier */
 	int	keyboard;	/* keyboard event reporting has been enabled */
 	int	cellw;		/* CSI 6 t cell geometry, before resize callback */
 	int	cellh;
