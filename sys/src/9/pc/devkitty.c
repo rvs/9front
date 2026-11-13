@@ -17,9 +17,13 @@
 enum {
 	Maxwidth = 1920,
 	Maxheight = 1200,
-	Maxtiles = 1024,
+	Maxpwidth = 3840,
+	Maxpheight = 2400,
+	Maxtiles = 4096,
 	Tilesize = 64,
 	Maxcell = 128,
+	Maxscale = 8,
+	Hidpi = 28,
 	Maxside = Tilesize+Maxcell,
 	Firstimage = 1001,
 
@@ -53,6 +57,10 @@ static struct {
 	ulong	acktime;
 	int	width;
 	int	height;
+	int	pwidth;
+	int	pheight;
+	int	scale;
+	int	scaling;
 	int	cellw;
 	int	cellh;
 	int	newwidth;
@@ -96,6 +104,17 @@ now(void)
 	return TK2MS(MACHP(0)->ticks);
 }
 
+static int
+scalefactor(int ch)
+{
+	int s;
+
+	s = kitty.scaling;
+	if(s == 1)
+		return ch >= Hidpi ? 2 : 1;
+	return s == 0 ? 1 : s;
+}
+
 static void
 alltiles(void)
 {
@@ -111,6 +130,10 @@ kittyflush(VGAscr*, Rectangle r)
 	ilock(&kitty);
 	if(kitty.active && kitty.tilew != 0
 	&& rectclip(&r, Rect(0, 0, kitty.width, kitty.height))){
+		r.min.x *= kitty.scale;
+		r.min.y *= kitty.scale;
+		r.max.x *= kitty.scale;
+		r.max.y *= kitty.scale;
 		for(y=r.min.y/kitty.tileh; y<=(r.max.y-1)/kitty.tileh; y++)
 			for(x=r.min.x/kitty.tilew; x<=(r.max.x-1)/kitty.tilew; x++)
 				kitty.dirty[y*kitty.nx+x] = 1;
@@ -166,29 +189,30 @@ kittytext(void*, Rune r)
 static void
 kittymouse(void*, int x, int y, int buttons, int pixel)
 {
-	int cw, ch;
+	int cw, ch, s;
 
 	if(buttons != 0 && inputquiet())
 		return;
 	ilock(&kitty);
 	cw = kitty.cellw;
 	ch = kitty.cellh;
+	s = kitty.scale;
 	iunlock(&kitty);
 	if(!pixel){
-		if(x > Maxwidth)
-			x = Maxwidth;
-		if(y > Maxheight)
-			y = Maxheight;
+		if(x > Maxpwidth)
+			x = Maxpwidth;
+		if(y > Maxpheight)
+			y = Maxpheight;
 		x = (x-1)*cw+cw/2;
 		y = (y-1)*ch+ch/2;
 	}
-	absmousetrack(x, y, buttons, now());
+	absmousetrack(x/s, y/s, buttons, now());
 }
 
 static void
 kittyresize(void*, int rows, int cols, int width, int height)
 {
-	int cw, ch;
+	int cw, ch, s;
 
 	cw = kitty.input.cellw;
 	ch = kitty.input.cellh;
@@ -197,19 +221,26 @@ kittyresize(void*, int rows, int cols, int width, int height)
 		kitty.newcellw = cw;
 	if(ch > 0 && ch <= Maxcell)
 		kitty.newcellh = ch;
+	s = scalefactor(kitty.newcellh);
 	/* row counts lose the partial cell at the bottom and right */
 	if(width == 0)
 		width = kitty.input.width;
 	if(height == 0)
 		height = kitty.input.height;
-	if(width == 0 && cols > 0 && cols <= Maxwidth)
+	if(width == 0 && cols > 0 && cols <= Maxpwidth)
 		width = cols*kitty.newcellw;
-	if(height == 0 && rows > 0 && rows <= Maxheight)
+	if(height == 0 && rows > 0 && rows <= Maxpheight)
 		height = rows*kitty.newcellh;
-	if(width >= 128)
-		kitty.newwidth = width > Maxwidth ? Maxwidth : width;
-	if(height >= 128)
-		kitty.newheight = height > Maxheight ? Maxheight : height;
+	if(width/s >= 128){
+		if(width > Maxpwidth)
+			width = Maxpwidth;
+		kitty.newwidth = width > Maxwidth*s ? Maxwidth*s : width;
+	}
+	if(height/s >= 128){
+		if(height > Maxpheight)
+			height = Maxpheight;
+		kitty.newheight = height > Maxheight*s ? Maxheight*s : height;
+	}
 	kitty.resize = 1;
 	iunlock(&kitty);
 	wakeup(&kitty.r);
@@ -345,16 +376,27 @@ static void
 resize(void)
 {
 	VGAscr *scr;
-	int w, h, cw, ch, n, screen;
+	int w, h, pw, ph, cw, ch, s, n, screen;
 
 	ilock(&kitty);
 	w = kitty.newwidth;
 	h = kitty.newheight;
 	cw = kitty.newcellw;
 	ch = kitty.newcellh;
+	s = scalefactor(ch);
+	w /= s;
+	h /= s;
+	if(w > Maxwidth)
+		w = Maxwidth;
+	if(h > Maxheight)
+		h = Maxheight;
+	pw = w*s;
+	ph = h*s;
 	screen = w != kitty.width || h != kitty.height;
 	kitty.resize = 0;
-	if(!screen && cw == kitty.cellw && ch == kitty.cellh){
+	if(w < 128 || h < 128
+	|| (!screen && pw == kitty.pwidth && ph == kitty.pheight
+	&& s == kitty.scale && cw == kitty.cellw && ch == kitty.cellh)){
 		iunlock(&kitty);
 		return;
 	}
@@ -383,12 +425,15 @@ resize(void)
 	ilock(&kitty);
 	kitty.width = w;
 	kitty.height = h;
+	kitty.pwidth = pw;
+	kitty.pheight = ph;
+	kitty.scale = s;
 	kitty.cellw = cw;
 	kitty.cellh = ch;
 	kitty.tilew = (Tilesize+cw-1)/cw*cw;
 	kitty.tileh = (Tilesize+ch-1)/ch*ch;
-	kitty.nx = (w+kitty.tilew-1)/kitty.tilew;
-	kitty.ny = (h+kitty.tileh-1)/kitty.tileh;
+	kitty.nx = (pw+kitty.tilew-1)/kitty.tilew;
+	kitty.ny = (ph+kitty.tileh-1)/kitty.tileh;
 	kitty.next = 0;
 	memset(kitty.dirty, 0, sizeof kitty.dirty);
 	alltiles();
@@ -421,9 +466,9 @@ snapshot(Rectangle *rp, int *sent, int nsent)
 {
 	VGAscr *scr;
 	Memimage *m;
-	Rectangle r;
+	Rectangle r, src;
 	uchar *p, *q;
-	int i, j, k, n, x, y;
+	int i, j, k, n, x, y, s, left;
 
 	ilock(&kitty);
 	n = kitty.nx*kitty.ny;
@@ -448,14 +493,17 @@ snapshot(Rectangle *rp, int *sent, int nsent)
 	r = Rect(i%kitty.nx*kitty.tilew, i/kitty.nx*kitty.tileh, 0, 0);
 	r.max.x = r.min.x+kitty.tilew;
 	r.max.y = r.min.y+kitty.tileh;
-	rectclip(&r, Rect(0, 0, kitty.width, kitty.height));
+	rectclip(&r, Rect(0, 0, kitty.pwidth, kitty.pheight));
+	s = kitty.scale;
 	iunlock(&kitty);
 
+	src = Rect(r.min.x/s, r.min.y/s,
+		(r.max.x+s-1)/s, (r.max.y+s-1)/s);
 	scr = &vgascreen[0];
 	qlock(&drawlock);
 	lock(&vgascreenlock);
 	m = scr->gscreen;
-	if(m == nil || m->chan != XRGB32 || !rectinrect(r, m->r)
+	if(m == nil || m->chan != XRGB32 || !rectinrect(src, m->r)
 	|| Dx(r) > Maxside || Dy(r) > Maxside){
 		unlock(&vgascreenlock);
 		qunlock(&drawlock);
@@ -463,11 +511,17 @@ snapshot(Rectangle *rp, int *sent, int nsent)
 	}
 	q = kitty.pixels;
 	for(y=r.min.y; y<r.max.y; y++){
-		p = byteaddr(m, Pt(r.min.x, y));
-		for(x=r.min.x; x<r.max.x; x++, p+=4){
+		p = byteaddr(m, Pt(r.min.x/s, y/s));
+		left = s-r.min.x%s;
+		for(x=r.min.x; x<r.max.x; x++){
 			*q++ = p[2];
 			*q++ = p[1];
 			*q++ = p[0];
+			/* tile boundaries need not coincide with scaled pixels */
+			if(--left == 0){
+				p += 4;
+				left = s;
+			}
 		}
 	}
 	unlock(&vgascreenlock);
@@ -649,7 +703,7 @@ static void
 kittyinitdev(void)
 {
 	VGAscr *scr;
-	char *s;
+	char *s, *p, *ep;
 
 	if((s = getconf("kittyuart")) == nil)
 		return;
@@ -658,6 +712,11 @@ kittyinitdev(void)
 		print("kitty: %s\n", up->errstr);
 		kitty.status = "initialization failed";
 		return;
+	}
+	if((p = getconf("kittyscale")) != nil){
+		kitty.scaling = strtol(p, &ep, 10);
+		if(*p == 0 || *ep != 0 || kitty.scaling < 0 || kitty.scaling > Maxscale)
+			error("bad kittyscale");
 	}
 	kitty.pixels = smalloc(Maxside*Maxside*3);
 	kitty.packed = smalloc(Maxside*Maxside*3);
@@ -675,13 +734,20 @@ kittyinitdev(void)
 	kitty.input.mouse = kittymouse;
 	kitty.input.resize = kittyresize;
 	kitty.input.reply = kittyreply;
-	kitty.width = kitty.newwidth = 800;
-	kitty.height = kitty.newheight = 600;
+	kitty.scale = scalefactor(16);
+	kitty.width = 800/kitty.scale;
+	kitty.height = 600/kitty.scale;
+	if(kitty.width < 128)
+		kitty.width = 128;
+	if(kitty.height < 128)
+		kitty.height = 128;
+	kitty.pwidth = kitty.newwidth = kitty.width*kitty.scale;
+	kitty.pheight = kitty.newheight = kitty.height*kitty.scale;
 	kitty.cellw = kitty.newcellw = 8;
 	kitty.cellh = kitty.newcellh = 16;
 	kitty.tilew = kitty.tileh = Tilesize;
-	kitty.nx = (kitty.width+Tilesize-1)/Tilesize;
-	kitty.ny = (kitty.height+Tilesize-1)/Tilesize;
+	kitty.nx = (kitty.pwidth+Tilesize-1)/Tilesize;
+	kitty.ny = (kitty.pheight+Tilesize-1)/Tilesize;
 
 	scr = &vgascreen[0];
 	qlock(&drawlock);
@@ -772,11 +838,12 @@ kittyread(Chan *c, void *a, long n, vlong off)
 		ilock(&kitty);
 		snprint(buf, sizeof buf, "%s\nsize %dx%d cell %dx%d\n"
 			"tiles %lud bytes %llud keys %lud dropped %lud\n"
-			"compress %d ztiles %lud raw %llud packed %llud batch %d groups %lud\n",
+			"compress %d ztiles %lud raw %llud packed %llud batch %d groups %lud\n"
+			"scale %d output %dx%d\n",
 			kitty.status, kitty.width, kitty.height, kitty.cellw, kitty.cellh,
 			kitty.tiles, kitty.bytes, kitty.keys, kitty.dropped,
 			kitty.compress, kitty.ztiles, kitty.rawbytes, kitty.packedbytes,
-			kitty.batch, kitty.batches);
+			kitty.batch, kitty.batches, kitty.scale, kitty.pwidth, kitty.pheight);
 		iunlock(&kitty);
 		return readstr(off, a, n, buf);
 	}

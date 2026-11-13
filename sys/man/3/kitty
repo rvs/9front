@@ -64,6 +64,48 @@ and userland:
 boot/qemu -amd64 -kitty
 .EE
 .PP
+For HiDPI scaling, use
+.B -x
+with
+.B -kitty
+or
+.BR -kitty-uart .
+An optional number from 0 to 8 selects the scaling mode:
+.IP
+.EX
+boot/qemu -amd64 -kitty -x 2
+.EE
+.PP
+The corresponding kernel configuration parameter is
+.BI kittyscale= n
+with a default of 0, meaning no scaling.
+Bare
+.B -x
+or
+.B -x 1
+selects an automatic factor of 2 when terminal cells are at least
+28 pixels tall, and 1 otherwise.
+This choice is reevaluated when terminal geometry changes.
+.B -x 0
+disables scaling;
+.B -x 2
+through
+.B -x 8
+selects an explicit factor.
+The number can also be attached to the option, as in
+.BR -x2 .
+The logical Plan 9 screen is the terminal's pixel area divided by
+the selected factor,
+rounded down.
+Each logical pixel, including those of the software cursor, is
+expanded by that factor in both directions using nearest-neighbour replication,
+not terminal image interpolation.
+Mouse coordinates are divided by the same factor.
+Fonts, borders, and menus therefore become larger without changing
+Plan 9 applications.
+An explicit factor is fixed at boot; terminal resizing changes the
+logical screen dimensions, not that factor.
+.PP
 The
 .B uartvcon
 transport in the
@@ -112,9 +154,15 @@ host terminal.
 At startup the driver enters the alternate screen, negotiates
 graphics and keyboard support, and requests the terminal's
 pixel and character-cell dimensions.
-The framebuffer initially measures 800 by 600 pixels.
-Geometry reports resize it, up to 1920 by 1200 pixels;
-dimensions smaller than 128 pixels are ignored.
+Before geometry is reported, the logical screen is derived from
+an 800 by 600 terminal pixel area and the configured scale,
+with a minimum of 128 pixels per dimension.
+Automatic scaling initially uses a factor of one.
+Geometry reports resize the logical framebuffer, up to 1920 by 1200 pixels,
+and its scaled output, up to 3840 by 2400 terminal pixels.
+Dimensions smaller than 128 logical pixels are ignored.
+The output dimensions are the logical dimensions multiplied by the scale;
+rounding down can leave a strip smaller than one scaled pixel at the edges.
 Cell dimensions are limited to 128 pixels.
 Resizing is also polled for terminals without in-band notifications.
 Draw clients receive the usual mouse resize notification.
@@ -134,6 +182,11 @@ After five seconds without an acknowledgement, transmission stops.
 .B Kittyctl
 reports the connection status, screen and cell dimensions,
 and transmission and input counters.
+The screen dimensions are logical pixels;
+.B scale
+gives the current scale factor and
+.B output
+gives the covered area in terminal pixels.
 It also reports the compression setting, compressed tile count,
 raw and transmitted pixel payload bytes, batch limit, and batch count.
 Writing

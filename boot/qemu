@@ -13,6 +13,7 @@ net=true
 vga=false
 kitty=false
 kittyuart=false
+scale=0
 
 while [ $# -gt 0 ]; do
 	case "$1" in
@@ -26,13 +27,29 @@ while [ $# -gt 0 ]; do
 	-vga)		vga=true ;;
 	-kitty)		kitty=true; kittyuart=false ;;
 	-kitty-uart)	kitty=true; kittyuart=true ;;
+	-x[0-8])	scale=${1#-x} ;;
+	-x)
+		scale=1
+		if [ $# -gt 1 ] && [[ $2 != -* ]]; then
+			if [[ ! $2 =~ ^[0-8]$ ]]; then
+				echo 'boot/qemu: -x takes an integer from 0 to 8' >&2
+				exit 1
+			fi
+			scale=$2; shift
+		fi
+		;;
 	*)
-		echo 'usage: boot/qemu [-386 | -amd64 | -arm64 | -riscv64] [-cpuwait] [-nonet] [-smp n] [-vga | -kitty | -kitty-uart]' >&2
+		echo 'usage: boot/qemu [-386 | -amd64 | -arm64 | -riscv64] [-cpuwait] [-nonet] [-smp n] [-vga | -kitty | -kitty-uart] [-x [n]]' >&2
 		exit 1
 		;;
 	esac
 	shift
 done
+
+if [ "$scale" != 0 ] && ! $kitty; then
+	echo 'boot/qemu: -x needs -kitty or -kitty-uart' >&2
+	exit 1
+fi
 
 case $arch in
 386)		base=9pc ;;
@@ -66,6 +83,9 @@ if $kitty; then
 		append="$append kittyuart=1 monitor=kitty"
 	else
 		append="$append kittyuart=2 monitor=kitty"
+	fi
+	if [ "$scale" != 0 ]; then
+		append="$append kittyscale=$scale"
 	fi
 fi
 kernel=${KERNEL:-$root/$arch/$base}
