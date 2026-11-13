@@ -25,6 +25,7 @@ dev
 	draw		screen vga vgax vgasoft
 	mouse		mouse
 	vga		pci
+	kitty		kitty
 
 	sd
 #	floppy		dma
@@ -121,6 +122,7 @@ misc
 	uartpci		pci
 
 	vgasoft		=cur swcursor
+	vgakitty
 #	vga3dfx		+cur
 #	vgaark2000pv	+cur
 #	vgabt485	=cur

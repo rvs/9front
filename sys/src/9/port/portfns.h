@@ -389,6 +389,7 @@ void		todset(vlong, vlong, int);
 Block*		trimblock(Block*, int, int);
 void		tsleep(Rendez*, int (*)(void*), void*, ulong);
 void		twakeup(Ureg*, Timer *);
+Uart*		uartclaim(char*, char*);
 int		uartctl(Uart*, char*);
 int		uartgetc(void);
 void		uartkick(void*);

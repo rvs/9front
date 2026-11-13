@@ -11,6 +11,7 @@ arch=386
 cpuwait=false
 net=true
 vga=false
+kitty=false
 
 while [ $# -gt 0 ]; do
 	case "$1" in
@@ -22,8 +23,9 @@ while [ $# -gt 0 ]; do
 	-nonet)		net=false ;;
 	-smp)		smp=$2; shift ;;
 	-vga)		vga=true ;;
+	-kitty)		kitty=true ;;
 	*)
-		echo 'usage: boot/qemu [-386 | -amd64 | -arm64 | -riscv64] [-cpuwait] [-nonet] [-smp n] [-vga]' >&2
+		echo 'usage: boot/qemu [-386 | -amd64 | -arm64 | -riscv64] [-cpuwait] [-nonet] [-smp n] [-vga | -kitty]' >&2
 		exit 1
 		;;
 	esac
@@ -48,6 +50,18 @@ if $cpuwait; then
 	forward=',hostfwd=tcp:127.0.0.1:17019-:17019'
 fi
 append="$append nvram=/dev/sdF0/data"
+if $kitty; then
+	case $arch in
+	386|amd64) ;;
+	*) echo 'boot/qemu: -kitty is for x86 kernels' >&2; exit 1 ;;
+	esac
+	if $vga || $cpuwait; then
+		echo 'boot/qemu: -kitty needs a terminal kernel without -vga' >&2
+		exit 1
+	fi
+	serial=${SERIAL:-file:$root/.qemu.console.log}
+	append="$append kittyuart=1 monitor=kitty"
+fi
 kernel=${KERNEL:-$root/$arch/$base}
 gfx=(-display none)
 if $vga; then
@@ -64,6 +78,9 @@ args=(-m "$mem" -smp "$smp" "${gfx[@]}" -monitor none -serial "$serial" -no-rebo
 # No secstore or p9sk1 key.
 args+=(-drive "file=$PWD/boot/cpu.nvram,if=none,id=nvram,format=raw,readonly=on"
 	-device virtio-blk-pci,drive=nvram,disable-legacy=on)
+if $kitty; then
+	args+=(-serial stdio)
+fi
 
 case $arch in
 386|amd64)
@@ -99,4 +116,9 @@ if $net; then
 else
 	args+=(-nic none)
 fi
-exec "$qemu" "${args[@]}"
+if $kitty; then
+	trap 'printf "\033[<u\033[?2048l\033[?2004l\033[?1004l\033[?1016l\033[?1006l\033[?1003l\033[?7h\033[?25h\033[?1049l"' EXIT
+	"$qemu" "${args[@]}"
+else
+	exec "$qemu" "${args[@]}"
+fi

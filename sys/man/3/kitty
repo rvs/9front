@@ -1,0 +1,147 @@
+.TH KITTY 3
+.SH NAME
+kitty \- serial terminal graphics and input
+.SH SYNOPSIS
+.nf
+.B bind -b '#κ' /dev
+
+.B /dev/kbd
+.B /dev/kittyctl
+.fi
+.SH DESCRIPTION
+The
+.I kitty
+device uses a dedicated serial port to display the kernel screen
+in a terminal supporting the Kitty graphics protocol.
+It provides a software framebuffer for the ordinary
+.IR draw (3)
+device, including the bitmap console and software cursor.
+Mouse reports are delivered through
+.IR mouse (3).
+The device is currently included in the
+.B pc
+and
+.B pc64
+kernels.
+.PP
+Set
+.BI kittyuart= n
+and
+.B monitor=kitty
+in the kernel configuration.
+The numbered UART must not be the serial console or already open.
+It is reserved until reboot and configured for 115200 baud,
+eight data bits, one stop bit, no parity, and no flow control.
+Ordinary reads and writes to its
+.B eia
+and
+.B eiactl
+files are refused.
+No port is opened and no screen is changed without
+.BR kittyuart .
+.PP
+The terminal and the UART must pass bytes unmodified, without
+local echo, line processing, or injected console messages.
+QEMU can connect the serial port directly to a terminal, socket,
+or pseudoterminal.
+The checkout's
+.B boot/qemu
+launcher selects a second serial port for graphics with
+.BR -kitty ;
+the first port's console output defaults to
+.B .qemu.console.log
+in the exported root.
+For example, from a Kitty-compatible terminal with a built kernel
+and userland:
+.IP
+.EX
+boot/qemu -amd64 -kitty
+.EE
+.PP
+.B -kitty
+cannot be combined with
+.B -vga
+or
+.BR -cpuwait .
+ARM64 and RISC-V screen and transport adapters are not provided.
+If the launcher is killed before it restores terminal modes,
+run the host's terminal reset command.
+Rebooting the guest ends QEMU; otherwise stop QEMU from another
+host terminal.
+.PP
+At startup the driver enters the alternate screen, negotiates
+graphics and keyboard support, and requests the terminal's
+pixel and character-cell dimensions.
+The framebuffer initially measures 800 by 600 pixels.
+Geometry reports resize it, up to 1920 by 1200 pixels;
+dimensions smaller than 128 pixels are ignored.
+Cell dimensions are limited to 128 pixels.
+Resizing is also polled for terminals without in-band notifications.
+Draw clients receive the usual mouse resize notification.
+Do not reconfigure this screen using
+.IR vga (3).
+.PP
+Dirty, cell-aligned tiles are copied out of the framebuffer,
+converted to RGB, and transmitted in bounded inline base64 chunks.
+Encoding, serial writes, and acknowledgement waits occur in a
+separate kernel process, never in a drawing or interrupt callback.
+Only one tile awaits a terminal status response at a time.
+Damage is coalesced while the terminal is slow.
+After five seconds without an acknowledgement, transmission stops.
+.B Kittyctl
+reports the connection status, screen and cell dimensions,
+and transmission and input counters.
+Writing
+.B redraw
+restarts negotiation and requests a full repaint.
+.PP
+.B Kbd
+is an exclusive-reader stream of complete, NUL-terminated keyboard
+messages understood by
+.IR kbdfs (8).
+The boot script binds it before starting
+.B kbdfs
+so the usual
+.B /dev/cons
+and
+.B /dev/kbd
+interfaces work without a new user-space decoder.
+Kitty keyboard press, repeat, release, modifier, and associated-text
+reports are accepted, with legacy escape-sequence fallback.
+SGR pixel mouse reports, cell-coordinate fallback,
+focus changes, and bracketed paste are supported.
+Paste is streamed rather than accumulated; control characters
+other than tab and newline are discarded.
+Input sequences and pending key state have fixed size limits.
+Input exceeding the queue limit is dropped and counted.
+.SH FILES
+.TF /sys/src/9/port/kitty.c
+.TP
+.B /sys/src/9/pc/devkitty.c
+Screen, UART, and device integration.
+.TP
+.B /sys/src/9/pc/vgakitty.c
+VGA framebuffer flush adapter.
+.TP
+.B /sys/src/9/port/kitty.c
+Terminal input parser.
+.TP
+.B /sys/src/9/port/kitty.h
+Parser interface.
+.SH SEE ALSO
+.IR draw (3),
+.IR mouse (3),
+.IR uart (3),
+.IR vga (3),
+.IR kbdfs (8),
+.IR rio (1)
+.SH LIMITATIONS
+This is a prototype for PC serial connections.
+It does not use shared memory, compressed graphics, frame editing,
+OSC 52 clipboard synchronization, or audio.
+Raw RGB over a real 115200-baud link is slow.
+Use a dedicated connection to a trusted terminal; this is not an
+authenticated transport.
+Attaching a different terminal requires a
+.B redraw
+request, and detaching the driver requires rebooting.

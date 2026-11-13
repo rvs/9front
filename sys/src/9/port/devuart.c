@@ -136,6 +136,48 @@ uartport(char *which)
 	return uart[port];
 }
 
+/* reserve the port and its queues for the life of the kernel */
+Uart*
+uartclaim(char *which, char *ctl)
+{
+	Uart *p;
+	char raw[64], *cmd;
+
+	p = uartport(which);
+	cmd = nil;
+	if(ctl != nil && *ctl != 0){
+		cmd = smalloc(strlen(ctl)+1);
+		strcpy(cmd, ctl);
+	}
+	qlock(p);
+	if(p->console || p == consuart || p->special || p->claimed || p->opens){
+		qunlock(p);
+		free(cmd);
+		error(Einuse);
+	}
+	if(waserror()){
+		uartdisable(p);
+		qclose(p->iq);
+		qclose(p->oq);
+		qunlock(p);
+		free(cmd);
+		nexterror();
+	}
+	if(uartenable(p) == nil)
+		error(Enodev);
+	strcpy(raw, "b115200 l8 pn s1 m0 x0 r1 d1 n0");
+	if(uartctl(p, raw) < 0)
+		error(Ebadarg);
+	if(cmd != nil && uartctl(p, cmd) < 0)
+		error(Ebadarg);
+	p->claimed = 1;
+	p->opens++;
+	poperror();
+	qunlock(p);
+	free(cmd);
+	return p;
+}
+
 void
 uartmouse(char *which, int (*putc)(Queue*, int), int setb1200)
 {
@@ -143,6 +185,10 @@ uartmouse(char *which, int (*putc)(Queue*, int), int setb1200)
 
 	p = uartport(which);
 	qlock(p);
+	if(p->claimed){
+		qunlock(p);
+		error(Einuse);
+	}
 	if(p->opens == 0 && uartenable(p) == nil){
 		qunlock(p);
 		error(Enodev);
@@ -162,6 +208,10 @@ uartsetmouseputc(char *which, int (*putc)(Queue*, int))
 
 	p = uartport(which);
 	qlock(p);
+	if(p->claimed){
+		qunlock(p);
+		error(Einuse);
+	}
 	if(p->opens == 0 || p->special == 0){
 		qunlock(p);
 		error(Enodev);
@@ -322,6 +372,11 @@ uartopen(Chan *c, int omode)
 	case Ndataqid:
 		p = uart[NETID(c->qid.path)];
 		qlock(p);
+		if(p->claimed){
+			qunlock(p);
+			c->flag &= ~COPEN;
+			error(Einuse);
+		}
 		if(p->opens == 0 && uartenable(p) == nil){
 			qunlock(p);
 			c->flag &= ~COPEN;

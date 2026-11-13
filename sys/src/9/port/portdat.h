@@ -929,6 +929,7 @@ struct Uart
 	PhysUart*phys;
 	int	console;		/* used as a serial console */
 	int	special;		/* internal kernel device */
+	int	claimed;		/* exclusive kernel reservation */
 	Uart*	next;			/* list of allocated uarts */
 
 	QLock;
