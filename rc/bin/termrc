@@ -6,7 +6,7 @@ TIMESYNCARGS=(-rLa1000000)
 NPROC=`{wc -l </dev/sysstat}
 
 # bind all likely devices
-for(i in P S f æ t L A J '$')
+for(i in P S f æ t L A J '$' κ)
 	bind -qa '#'^$i /dev
 rm -f /env/i
 

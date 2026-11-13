@@ -68,6 +68,7 @@ LIB=\
 	/$objtype/lib/libip.a\
 	/$objtype/lib/libsec.a\
 	/$objtype/lib/libmp.a\
+	/$objtype/lib/libflate.a\
 	/$objtype/lib/libc.a\
 	/$objtype/lib/libfis.a\
 	/$objtype/lib/libaml.a\

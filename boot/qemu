@@ -11,6 +11,9 @@ arch=386
 cpuwait=false
 net=true
 vga=false
+kitty=false
+kittyuart=false
+scale=0
 
 while [ $# -gt 0 ]; do
 	case "$1" in
@@ -22,13 +25,31 @@ while [ $# -gt 0 ]; do
 	-nonet)		net=false ;;
 	-smp)		smp=$2; shift ;;
 	-vga)		vga=true ;;
+	-kitty)		kitty=true; kittyuart=false ;;
+	-kitty-uart)	kitty=true; kittyuart=true ;;
+	-x[0-8])	scale=${1#-x} ;;
+	-x)
+		scale=1
+		if [ $# -gt 1 ] && [[ $2 != -* ]]; then
+			if [[ ! $2 =~ ^[0-8]$ ]]; then
+				echo 'boot/qemu: -x takes an integer from 0 to 8' >&2
+				exit 1
+			fi
+			scale=$2; shift
+		fi
+		;;
 	*)
-		echo 'usage: boot/qemu [-386 | -amd64 | -arm64 | -riscv64] [-cpuwait] [-nonet] [-smp n] [-vga]' >&2
+		echo 'usage: boot/qemu [-386 | -amd64 | -arm64 | -riscv64] [-cpuwait] [-nonet] [-smp n] [-vga | -kitty | -kitty-uart] [-x [n]]' >&2
 		exit 1
 		;;
 	esac
 	shift
 done
+
+if [ "$scale" != 0 ] && ! $kitty; then
+	echo 'boot/qemu: -x needs -kitty or -kitty-uart' >&2
+	exit 1
+fi
 
 case $arch in
 386)		base=9pc ;;
@@ -48,6 +69,31 @@ if $cpuwait; then
 	forward=',hostfwd=tcp:127.0.0.1:17019-:17019'
 fi
 append="$append nvram=/dev/sdF0/data"
+if $kitty; then
+	case $arch in
+	386|amd64) ;;
+	arm64)
+		if $kittyuart; then
+			echo 'boot/qemu: -kitty-uart needs an x86 COM2; use -kitty on arm64' >&2
+			exit 1
+		fi
+		;;
+	*) echo 'boot/qemu: -kitty is for x86 and arm64 kernels' >&2; exit 1 ;;
+	esac
+	if $vga || $cpuwait; then
+		echo 'boot/qemu: -kitty needs a terminal kernel without -vga' >&2
+		exit 1
+	fi
+	serial=${SERIAL:-file:$root/.qemu.console.log}
+	if $kittyuart; then
+		append="$append kittyuart=1 monitor=kitty"
+	else
+		append="$append kittyuart=virtserialport1 monitor=kitty"
+	fi
+	if [ "$scale" != 0 ]; then
+		append="$append kittyscale=$scale"
+	fi
+fi
 kernel=${KERNEL:-$root/$arch/$base}
 gfx=(-display none)
 if $vga; then
@@ -64,6 +110,19 @@ args=(-m "$mem" -smp "$smp" "${gfx[@]}" -monitor none -serial "$serial" -no-rebo
 # No secstore or p9sk1 key.
 args+=(-drive "file=$PWD/boot/cpu.nvram,if=none,id=nvram,format=raw,readonly=on"
 	-device virtio-blk-pci,drive=nvram,disable-legacy=on)
+if $kitty; then
+	if $kittyuart; then
+		args+=(-serial stdio)
+	else
+		# Preserve the x86 COM2 backend for legacy UART users.
+		case $arch in
+		386|amd64) args+=(-serial null) ;;
+		esac
+		args+=(-chardev stdio,id=kitty,signal=off
+			-device virtio-serial-pci,id=kittyserial,disable-legacy=on,max_ports=2
+			-device virtserialport,bus=kittyserial.0,chardev=kitty,nr=1,name=org.9front.kitty)
+	fi
+fi
 
 case $arch in
 386|amd64)
@@ -99,4 +158,9 @@ if $net; then
 else
 	args+=(-nic none)
 fi
-exec "$qemu" "${args[@]}"
+if $kitty; then
+	trap 'printf "\033[<u\033[?2048l\033[?2004l\033[?1004l\033[?1016l\033[?1006l\033[?1003l\033[?7h\033[?25h\033[?1049l"' EXIT
+	"$qemu" "${args[@]}"
+else
+	exec "$qemu" "${args[@]}"
+fi
