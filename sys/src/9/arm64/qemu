@@ -12,8 +12,8 @@ dev
 	tls
 	cap
 	fs
-	draw	screen swcursor
-	mouse	screen swcursor
+	draw	screenkitty swcursor
+	mouse	screenkitty swcursor
 	kitty	kitty flate
 	ether	netif
 	bridge	log

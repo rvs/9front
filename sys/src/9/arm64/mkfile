@@ -93,7 +93,7 @@ install:V: /$objtype/$p$CONF
 main.$O: rebootcode.i
 
 pciqemu.$O: ../port/pci.h
-screen.$O: ../port/kittyscreen.h
+screenkitty.$O: screen.h ../port/kittyscreen.h /sys/include/draw.h /sys/include/memdraw.h /sys/include/cursor.h
 
 initcode.out:		init9.$O initcode.$O /$objtype/lib/libc.a
 	$LD -l -R1 -s -o $target $prereq

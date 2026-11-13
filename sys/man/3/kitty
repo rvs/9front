@@ -258,7 +258,7 @@ Architecture-independent rendering, input, and device integration.
 .B /sys/src/9/pc/vgakitty.c
 PC VGA framebuffer and screen adapter.
 .TP
-.B /sys/src/9/arm64/screen.c
+.B /sys/src/9/arm64/screenkitty.c
 ARM64 software framebuffer adapter.
 .TP
 .B /sys/src/9/port/kittyscreen.h

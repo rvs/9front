@@ -8,7 +8,7 @@ extern void	mouseaccelerate(int);
 extern void	mouseresize(void);
 extern void	mouseredraw(void);
 
-/* screen.c */
+/* screenkitty.c */
 extern Memimage	*gscreen;
 extern Memdata*	attachscreen(Rectangle*, ulong*, int*, int*, int*);
 extern void	flushmemscreen(Rectangle);
