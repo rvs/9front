@@ -106,6 +106,7 @@ LIB=\
 	/$objtype/lib/libip.a\
 	/$objtype/lib/libsec.a\
 	/$objtype/lib/libmp.a\
+	/$objtype/lib/libflate.a\
 	/$objtype/lib/libc.a\
 	/$objtype/lib/libdtracy.a\
 
@@ -148,6 +149,7 @@ install.%:V:	$p$CONF
 #main.$O: rebootcode.i
 
 pciqemu.$O: ../port/pci.h
+screen.$O: screen.h ../port/kittyscreen.h /sys/include/draw.h /sys/include/memdraw.h /sys/include/cursor.h
 
 initcode.out:		init9.$O initcode.$O /$objtype/lib/libc.a
 	$LD -l -R1  -o $target $prereq

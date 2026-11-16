@@ -12,6 +12,9 @@ dev
 	tls
 	cap
 	fs
+	draw	screenkitty swcursor
+	mouse	screenkitty swcursor
+	kitty	kitty flate
 	ether	netif
 	bridge	log
 	ip	arp chandial ip ipv6 ipaux iproute netlog nullmedium pktmedium inferno

@@ -20,6 +20,7 @@ dev
 	uart
 	draw	screen swcursor
 	mouse	screen swcursor
+	kitty	kitty flate
 	usb
 	i2c
 	gpiok3
@@ -58,6 +59,7 @@ ip
 misc
 #	gic
 	uarti8250
+	uartvcon	pci virtio10mem
 	sdvirtio10	pci sdscsi
 	sdmmc		sdspacemit
 	sdufs		sdscsi

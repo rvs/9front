@@ -20,7 +20,7 @@ fn ask {
 	}
 }
 
-if(test -f /dev/vgactl || bind -a '#v' /dev >[2] /dev/null){
+if(! ~ $"monitor kitty && {test -f /dev/vgactl || bind -a '#v' /dev >[2] /dev/null}){
 	ask vgasize ' is (text, 640x480x8, 1024x768x16, ...)' 1024x768x16
 	if(! ~ $"vgasize '' text none){
 		ask monitor ' is (vesa, xga, lcd, ...)' vesa
@@ -41,7 +41,7 @@ if(! test -d /dev/draw)
 if(! test -f /dev/mouse)
 	bind -a '#m' /dev
 
-if(test -f /dev/mousectl && test -f /dev/winname){
+if(! ~ $"monitor kitty && test -f /dev/mousectl && test -f /dev/winname){
 	ask mouseport ' is (ps2, ps2intellimouse, 0, 1, 2)' ps2
 	switch($mouseport){
 	case ps2 ps2intellimouse 0 1 2
