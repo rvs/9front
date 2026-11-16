@@ -41,16 +41,20 @@
 #include "mem.h"
 #include "dat.h"
 #include "fns.h"
+#include "../port/error.h"
 
 #define	Image	IMAGE
 #include <draw.h>
 #include <memdraw.h>
 #include <cursor.h>
 #include "screen.h"
+#include "../port/kittyscreen.h"
 
 enum {
 	Tabstop		= 4,
 	Scroll		= 8,
+	Maxwidth	= 1920,
+	Maxheight	= 1200,
 };
 
 Memimage *gscreen;
@@ -66,6 +70,7 @@ static Memimage *back;
 static Memsubfont *memdefont;
 
 static Lock screenlock;
+static int kittyscreen;
 
 static Point	curpos;
 static int	h, w;
@@ -74,6 +79,80 @@ static Rectangle window;
 static void myscreenputs(char *s, int n);
 static void screenputc(char *buf);
 static void screenwin(void);
+
+static Memimage*
+kittyimage(int width, int height)
+{
+	Memimage *i;
+
+	if(width <= 0 || width > Maxwidth || height <= 0 || height > Maxheight)
+		error("bad screen size");
+	if(memimageinit() < 0)
+		error("memimageinit failed");
+	i = allocmemimage(Rect(0, 0, width, height), XRGB32);
+	if(i == nil)
+		error(Enomem);
+	memfillcolor(i, DBlack);
+	return i;
+}
+
+void
+kittyscreeninit(int width, int height)
+{
+	Memimage *i;
+
+	if(gscreen != nil)
+		error("screen already initialized");
+	i = kittyimage(width, height);
+	ilock(&screenlock);
+	gscreen = i;
+	kittyscreen = 1;
+	iunlock(&screenlock);
+	swcursorinit();
+	setcursor(&cursor);
+	cursoron();
+}
+
+void
+kittyscreenresize(int width, int height)
+{
+	Memimage *i, old;
+
+	if(!kittyscreen || gscreen == nil)
+		error("kitty screen not initialized");
+	i = kittyimage(width, height);
+	cursoroff();
+	deletescreenimage();
+
+	/* mouse tracking can read gscreen without drawlock */
+	ilock(&screenlock);
+	old = *gscreen;
+	*gscreen = *i;
+	*i = old;
+	gscreen->data->imref = gscreen;
+	i->data->imref = nil;
+	iunlock(&screenlock);
+	freememimage(i);
+
+	swcursorinit();
+	setcursor(&cursor);
+	cursoron();
+	resetscreenimage();
+	flushmemscreen(gscreen->r);
+}
+
+Memimage*
+kittyscreenlock(void)
+{
+	ilock(&screenlock);
+	return kittyscreen ? gscreen : nil;
+}
+
+void
+kittyscreenunlock(void)
+{
+	iunlock(&screenlock);
+}
 
 enum
 {
@@ -106,20 +185,33 @@ mousectl(Cmdbuf *cb)
 void
 cursoron(void)
 {
+	if(kittyscreen)
+		ilock(&screenlock);
 	swcursorhide(0);
 	swcursordraw(mousexy());
+	if(kittyscreen)
+		iunlock(&screenlock);
 }
 
 void
 cursoroff(void)
 {
-	swcursorhide(0);
+	if(kittyscreen){
+		ilock(&screenlock);
+		swcursorhide(1);
+		iunlock(&screenlock);
+	}else
+		swcursorhide(0);
 }
 
 void
 setcursor(Cursor* curs)
 {
+	if(kittyscreen)
+		ilock(&screenlock);
 	swcursorload(curs);
+	if(kittyscreen)
+		iunlock(&screenlock);
 }
 
 /*
@@ -135,8 +227,22 @@ int
 hwdraw(Memdrawparam *par)
 {
 	Memimage *dst, *src, *mask;
+	Memdata *data;
 	uchar *scrd;
 
+	if(gscreen == nil)
+		return 0;
+	if(kittyscreen){
+		data = gscreen->data;
+		/* cursor draws already hold screenlock */
+		if(par->dst != nil && par->dst->data == data)
+			swcursoravoid(par->r);
+		if(par->src != nil && par->src->data == data)
+			swcursoravoid(par->sr);
+		if(par->mask != nil && par->mask->data == data)
+			swcursoravoid(par->mr);
+		return 0;
+	}
 	if((dst = par->dst) == nil || dst->data == nil)
 		return 0;
 	if((src = par->src) && src->data == nil)
@@ -244,6 +350,8 @@ screensettilt(char *name)
 		return "bad tilt";
 	if(gscreen == nil)
 		return "no screen";
+	if(kittyscreen)
+		return t == 0 ? nil : "kitty screen does not support tilt";
 	return newscreen(fbstride/4, tilt & 1? Dx(gscreen->r): Dy(gscreen->r), t);
 }
 
@@ -318,7 +426,14 @@ flushmemscreen(Rectangle r)
 	int n, spitch;
 	uchar *d, *s;
 
-	if(gscreen == nil || fbraw == nil)
+	if(gscreen == nil)
+		return;
+	if(kittyscreen){
+		if(rectclip(&r, gscreen->r))
+			kittyflush(r);
+		return;
+	}
+	if(fbraw == nil)
 		return;
 	if(!rectclip(&r, gscreen->r))
 		return;
@@ -383,6 +498,15 @@ attachscreen(Rectangle *r, ulong *chan, int *d, int *width, int *softscreen)
 void
 getcolor(ulong p, ulong *pr, ulong *pg, ulong *pb)
 {
+	ulong rgb;
+
+	if(kittyscreen){
+		rgb = cmap2rgb(p & 255);
+		*pr = ((rgb >> 16) & 255)*0x01010101;
+		*pg = ((rgb >> 8) & 255)*0x01010101;
+		*pb = (rgb & 255)*0x01010101;
+		return;
+	}
 	USED(p, pr, pg, pb);
 }
 

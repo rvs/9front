@@ -35,8 +35,10 @@ extern void mouseredraw(void);
 
 /* devdraw.c */
 extern QLock	drawlock;
+extern void	deletescreenimage(void);
+extern void	resetscreenimage(void);
 
-#define ishwimage(i)	1		/* for ../port/devdraw.c */
+#define ishwimage(i)	(gscreen != nil && (i)->data == gscreen->data)
 
 /* swcursor.c */
 void		swcursorhide(int);

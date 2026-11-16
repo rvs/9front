@@ -177,6 +177,7 @@ fn main{
 }
 
 # keyboard and serial console
+bind -qb '#κ' /dev
 if(test -x /bin/aux/kbdfs){
 	a=$console(1)
 	if(! ~ $#a 0)
