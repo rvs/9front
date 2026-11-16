@@ -4,6 +4,25 @@ if(! syscall create /tmp/xxx 1 0666 >[2]/dev/null)
 	ramfs	# in case we're running off a cd
 font=/lib/font/bit/vga/unicode.font
 switch($service){
+case batch
+	batchstatus=pass
+	if(test -d $home/batch)
+		for(f in $home/batch/*){
+			if(test -f $f){
+				echo batch: starting $f
+				if(/bin/rc -e $f)
+					echo batch: pass $f
+				if not {
+					echo batch: fail $f
+					batchstatus=fail
+				}
+			}
+		}
+	if(~ $batchstatus pass)
+		echo BATCH-PASS
+	if not
+		echo BATCH-FAIL
+	while() sleep 60
 case terminal
 	if(! webcookies >[2]/dev/null)
 		webcookies -f /tmp/webcookies
