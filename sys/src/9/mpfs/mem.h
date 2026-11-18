@@ -11,3 +11,11 @@
 
 #undef PLICSCTXT
 #define PLICSCTXT	2
+
+/*
+ * DDR the HSS maps non-cached at 0xc0000000, outside the RAM bank:
+ * the DTB's non-cached-low-buffer.  The U54s have no cache-block
+ * operations, so device DMA goes through here.
+ */
+#define NCDMABASE	0xc4000000ULL
+#define NCDMASIZE	(64*MiB)
