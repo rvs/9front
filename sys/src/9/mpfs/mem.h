@@ -18,3 +18,11 @@
  * kernel sees it UMEMOFF lower (see mem.c).
  */
 #define UMEMOFF		(16ULL*GiB)
+
+/*
+ * DDR the HSS maps non-cached at 0xc0000000, outside the RAM banks:
+ * the DTB's non-cached-low-buffer.  The U54s have no cache-block
+ * operations, so device DMA goes through here.
+ */
+#define NCDMABASE	0xc4000000ULL
+#define NCDMASIZE	(64*MiB)
