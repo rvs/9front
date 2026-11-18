@@ -2,3 +2,4 @@
 
 /* mem */
 extern void memdtbprop(char*, char*, uchar*, int);
+extern void* ncalloc(usize, usize);
