@@ -44,32 +44,7 @@ mmu0init(uintptr *l1)
 #endif
 }
 
-/*
- * Map RAM at or above UZERO, where the identity map would fall in
- * user space, at KHIGH in the upper half of the Sv39 space.  The
- * kernel reaches it only through kaddr (kmap of user pages and page
- * tables); cankaddr keeps xalloc out of it.  2MiB leaves cover just
- * the bank: the rest of its GiB may alias other memory.
- */
-static void
-kmaphigh(uintptr base, uintptr limit)
-{
-	extern uintptr khighlimit;
-	extern u64int *sv39;
-	u64int *l2, *pte;
-	uintptr pa, va;
-
-	for(pa = base & -PGLSZ(1); pa < limit; pa += PGLSZ(1)){
-		va = KHIGH + (pa - UZERO);
-		pte = &sv39[PTLX(va, 2)];
-		if((*pte & PTEVALID) == 0)
-			*pte = PA2PTE((uintptr)bootptpage()) | PTEVALID;
-		l2 = (u64int*)(uintptr)PTE2PA(*pte);
-		l2[PTLX(va, 1)] = PA2PTE(pa) | 0xcf;
-	}
-	if(limit > khighlimit)
-		khighlimit = limit;
-}
+uintptr uzero = 0x1000000000ULL;	/* until meminit */
 
 static void
 addbank(uvlong base, uvlong limit)
@@ -80,10 +55,6 @@ addbank(uvlong base, uvlong limit)
 	limit &= ~(uvlong)(BY2PG-1);
 	if(limit <= base || limit - base < MiB)
 		return;
-	if(base >= UZERO && limit - UZERO > KHIGHSIZE){
-		print("meminit: bank %#llux-%#llux beyond KHIGH, not used\n", base, limit);
-		return;
-	}
 	for(cm = &conf.mem[1]; cm < &conf.mem[nelem(conf.mem)]; cm++)
 		if(cm->npage == 0)
 			break;
@@ -115,30 +86,43 @@ addrange(uvlong base, uvlong limit, int r)
 }
 
 /*
- * RAM banks in the DTB other than the one the kernel was loaded
- * in, which is conf.mem[0].  Returns the highest limit below UZERO,
- * for kmapram.
+ * User space starts above all RAM, on a root table slot boundary
+ * and never below 4GiB.  *uzero moves it; RAM above it is not used.
  */
-static uintptr
-dtbbanks(uintptr l)
+static void
+setuzero(void)
 {
-	uvlong b, e;
 	Confmem *cm;
-	int i;
+	uvlong top, min;
+	char *p;
 
-	for(i = 0; dtbmemregion(0, i, &b, &e) == 0; i++)
-		if(VDRAM < b || VDRAM >= e)
-			addrange(b, e, 0);
-	for(cm = &conf.mem[1]; cm < &conf.mem[nelem(conf.mem)]; cm++){
-		if(cm->npage == 0)
-			continue;
-		if(cm->base >= UZERO)
-			kmaphigh(cm->base, cm->limit);
-		else if(cm->limit > l)
-			l = cm->limit;
-		print("meminit: bank %#p-%#p\n", cm->base, cm->limit);
+	min = 4ULL*GiB;
+	if(min < PADDR(end))
+		min = PADDR(end);
+	top = min;
+	for(cm = conf.mem; cm < &conf.mem[nelem(conf.mem)]; cm++)
+		if(cm->limit > top)
+			top = cm->limit;
+	if(p = getconf("*uzero"))
+		top = strtoull(p, 0, 0);
+	if(top < min)
+		top = min;
+	uzero = ROUND(top, PGLSZ(PTLEVELS-1));
+	if(uzero >= USTKTOP - USTKSIZE)
+		panic("meminit: uzero %#p beyond user space", uzero);
+	print("meminit: uzero %#p\n", uzero);
+	for(cm = conf.mem; cm < &conf.mem[nelem(conf.mem)]; cm++){
+		if(cm->limit > uzero){
+			print("meminit: ram %#p-%#p above uzero not used\n",
+				cm->base > uzero ? cm->base : uzero, cm->limit);
+			cm->limit = uzero;
+		}
+		if(cm->limit < cm->base)
+			cm->limit = cm->base;
+		cm->npage = (cm->limit - cm->base)/BY2PG;
+		if(cm->npage != 0)
+			print("meminit: bank %#p-%#p\n", cm->base, cm->limit);
 	}
-	return l;
 }
 
 void
@@ -146,8 +130,9 @@ meminit(void)
 {
 	char *p;
 	uintptr l = VDRAM + 2ULL * GiB;
+	uvlong b, e;
+	int i;
 	extern u64int *sv57, *sv48, *sv39, *pGiB;
-	extern uintptr klimit;
 
 	if(p = getconf("*maxmem"))
 		l = strtoull(p, 0, 0);
@@ -156,14 +141,18 @@ meminit(void)
 	conf.mem[0].base = ROUND(PGROUND((uintptr)end - KTZERO) + (uintptr)(VDRAM+0x2fffff), 0x200000);
 	conf.mem[0].limit = l;
 
-	if(l > KLIMIT)
-		l = KLIMIT;
+	/* the other RAM banks in the DTB */
+	for(i = 0; dtbmemregion(0, i, &b, &e) == 0; i++)
+		if(VDRAM < b || VDRAM >= e)
+			addrange(b, e, 0);
+	setuzero();
+
 	sv57 = (void *)PGROUND((uintptr)end);
 	sv48 = (void *)PGROUND((uintptr)sv57 + 1);
 	sv39 = (void *)PGROUND((uintptr)sv48 + 1);
 	pGiB = (void *)PGROUND((uintptr)sv39 + 1);
 	memset(sv57, 0, 16384);
-	kmapram(conf.mem[0].base, dtbbanks(l));
+	kmapram();
 
 	conf.mem[0].npage = (conf.mem[0].limit - conf.mem[0].base)/BY2PG;
 }

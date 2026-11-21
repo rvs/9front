@@ -10,37 +10,27 @@ enum {
 
 #define INITMAP	(ROUND((uintptr)end + BY2PG, PGLSZ(1))-KZERO)
 
-// kmax will be computed dynamically in future; for now it is
-// UZERO.
-uintptr klimit = UZERO;
-uintptr khighlimit = UZERO;	/* end of the RAM mapped at KHIGH */
-
 uintptr
 paddr(void *va)
 {
-	if((uintptr)va < KLIMIT)
+	if((uintptr)va < UZERO)
 		return (uintptr)va;
-	if((uintptr)va >= KHIGH && (uintptr)va - KHIGH < khighlimit - UZERO)
-		return (uintptr)va - KHIGH + UZERO;
 	panic("paddr: va=%#p pc=%#p", va, getcallerpc(&va));
 }
 
 uintptr
 cankaddr(uintptr pa)
 {
-//	print("cankaddr %p, -KZ %p\n", pa,(uintptr)-KZERO );
-	if(pa < (uintptr)KLIMIT)
-		return KLIMIT - pa;
+	if(pa < UZERO)
+		return UZERO - pa;
 	return 0;
 }
 
 void*
 kaddr(uintptr pa)
 {
-	if(pa < (uintptr)KLIMIT)
-		return (void*)(pa);
-	if(pa >= UZERO && pa < khighlimit)
-		return (void*)(pa - UZERO + KHIGH);
+	if(pa < UZERO)
+		return (void*)pa;
 	panic("kaddr: pa=%#p pc=%#p", pa, getcallerpc(&pa));
 }
 

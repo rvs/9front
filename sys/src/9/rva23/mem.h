@@ -60,18 +60,12 @@
 #define	KTZERO		ktzero		/* kernel text start */
 
 #define	KZERO		(0x0000000000000000ULL)	/* 0x00000000 - kernel address space */
-#define KLIMIT 		klimit
-//#define KLIMIT			(0x800000000000ULL) // half of the hole.
 /*
  * the kernel is identity-mapped low memory with user space above it,
  * so the usual "above KZERO" test for kernel addresses is inverted.
- * RAM at or above UZERO is mapped for the kernel at KHIGH+(pa-UZERO),
- * the upper half of the Sv39 space.
  */
-#define KHIGH		(0xffffffc000000000ULL)
-#define KHIGHSIZE	(256ULL*GiB)
-#define iskern(v)	(((uintptr)(v)) <= UZERO || ((uintptr)(v)) >= KHIGH)
-#define iskaddr(a)	(((uintptr)(a)) < UZERO || ((uintptr)(a)) >= KHIGH)
+#define iskern(v)	(((uintptr)(v)) <= UZERO)
+#define iskaddr(a)	(((uintptr)(a)) < UZERO)
 
 /* shared kernel page table for TTBR1 */
 #define L1		(L1TOP-L1SIZE)
@@ -106,12 +100,13 @@
 
 #define	REBOOTADDR	(VDRAM-KZERO + 0x20000)
 
-// Sv39 max address is 1<<38-1. Choose 1<<36. (1<<32 for now)
-// This gives kernel a lot of memory, and over time,
-// user gets even more.
-#define	UZERO		(0x1000000000ULL)			/* user segment */
+/*
+ * user space is [UZERO, USTKTOP), above all the memory and devices the
+ * kernel maps; meminit chooses UZERO at boot.
+ */
+#define	UZERO		uzero			/* user segment */
 #define	UTZERO		(UZERO)		/* user text start */
-#define	USTKTOP		((UZERO<<1)-BY2PG)	/* user segment end +1 */
+#define	USTKTOP		((1ULL<<(EVASHIFT-1))-BY2PG)	/* user segment end +1 */
 #define	USTKSIZE	(16*1024*1024)		/* user stack size */
 
 #define BLOCKALIGN	64			/* only used in allocb.c */

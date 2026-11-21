@@ -73,7 +73,7 @@ void
 confinit(void)
 {
 	int userpcnt;
-	ulong kpages, kmax, n;
+	ulong kpages;
 	char *p;
 	int i;
 
@@ -120,16 +120,6 @@ confinit(void)
 	 */
 	if(kpages > (2ULL*GiB)/BY2PG)
 		kpages = (2ULL*GiB)/BY2PG;
-	/* nor more than xinit can give it: memory kaddr can reach */
-	kmax = 0;
-	for(i = 0; i < nelem(conf.mem); i++){
-		n = cankaddr(conf.mem[i].base)/BY2PG;
-		if(n > conf.mem[i].npage)
-			n = conf.mem[i].npage;
-		kmax += n;
-	}
-	if(kpages > kmax)
-		kpages = kmax;
 
 	conf.upages = conf.npage - kpages;
 	conf.ialloc = (kpages/2)*BY2PG;
