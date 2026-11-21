@@ -317,6 +317,20 @@ one for each absolute pointer in initialized data;
 .B jl
 .B -u
 emits only the relocation data (the import table is empty).
+.PP
+An executable with
+.B DYN_MAGIC
+set is linked as if loaded at 0, its text following the header;
+.IR exec (2)
+loads it at the start of user space,
+which the kernel may choose at boot,
+and applies the relocations,
+which must all lie in the data segment.
+Unless given
+.BR -T ,
+.B jl
+.B -u
+links executables this way.
 .SH "SEE ALSO"
 .IR db (1), 
 .IR acid (1), 
@@ -335,4 +349,4 @@ flags on the compilers will produce symbols for
 Dynamically loadable modules exist, and aren't even used anywhere.
 (However, the
 .B -u
-flag is used to make the RISC-V kernel relocatable.)
+flag is used to make the RISC-V kernel and executables relocatable.)
