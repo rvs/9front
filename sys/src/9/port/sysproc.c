@@ -294,6 +294,83 @@ beswav(uvlong v)
 				  | (uvlong)p[7];
 }
 
+static uvlong
+relget(uchar *p, int n)
+{
+	uvlong v;
+
+	v = 0;
+	while(n-- > 0)
+		v = v<<8 | *p++;
+	return v;
+}
+
+/*
+ * A DYN_MAGIC executable is linked at 0 and runs at UTZERO.  Its
+ * relocation table (see a.out(6)) follows the symbols: read it and
+ * check that every entry adds the displacement to an aligned word in
+ * the data segment, so the shared text is never written.
+ */
+static uchar*
+reltab(Chan *c, vlong off, uintptr base, uintptr adata, uintptr edata, int wsz, ulong *np)
+{
+	uchar buf[12], *tab, *p, *ep;
+	ulong t, n;
+	uintptr a;
+	int k;
+
+	if(devtab[c->type]->read(c, buf, sizeof buf, off) != sizeof buf)
+		error(Ebadexec);
+	t = relget(buf, 4);
+	n = relget(buf+8, 4);
+	if(relget(buf+4, 4) != 0 || t < 8 || n > (edata - adata)/wsz || t - 8 > 5*(uvlong)n)
+		error(Ebadexec);
+	t -= 8;
+	*np = n;
+	if((tab = malloc(t+1)) == nil)
+		error(Enomem);
+	if(waserror()){
+		free(tab);
+		nexterror();
+	}
+	if(devtab[c->type]->read(c, tab, t, off+sizeof buf) != t)
+		error(Ebadexec);
+	a = base;
+	p = tab;
+	ep = tab + t;
+	while(n-- > 0){
+		if(p >= ep || (*p & 0xF) != 0 || (*p>>6) > 2)
+			error(Ebadexec);
+		k = 1 << (*p>>6);
+		if(p + 1 + k > ep)
+			error(Ebadexec);
+		a += relget(p+1, k) << 2;
+		p += 1 + k;
+		if(a < adata || a > edata - wsz || (a & wsz-1) != 0)
+			error(Ebadexec);
+	}
+	if(p != ep)
+		error(Ebadexec);
+	poperror();
+	return tab;
+}
+
+static void
+relocate(uchar *p, ulong n, uintptr a, uintptr delta, int wsz)
+{
+	int k;
+
+	while(n-- > 0){
+		k = 1 << (*p>>6);
+		a += relget(p+1, k) << 2;
+		p += 1 + k;
+		if(wsz == 8)
+			*(uvlong*)a += delta;
+		else
+			*(u32int*)a += delta;
+	}
+}
+
 uintptr
 sysexec(va_list list)
 {
@@ -307,8 +384,9 @@ sysexec(va_list list)
 	char *progarg[32+1], **argv, **argp;
 	char *file, *elem, *args, *charp, *a, *e;
 	int i, n, indir, nargs, argc;
-	ulong magic, ssize, nbytes;
-	uintptr entry, text, data, bss, adata, abss, ebss, tstk, align;
+	ulong magic, ssize, nbytes, dyn, nrel;
+	uintptr entry, text, data, bss, adata, abss, ebss, tstk, align, hsize;
+	uchar *rel;
 	Segment *s, *ts;
 	Image *img;
 	Tos *tos;
@@ -390,7 +468,7 @@ sysexec(va_list list)
 		n = devtab[tc->type]->read(tc, u.buf, sizeof(u.buf), 0);
 		if(n >= sizeof(Exec)) {
 			magic = beswal(u.ehdr.magic);
-			if(magic == AOUT_MAGIC)
+			if((magic & ~DYN_MAGIC) == AOUT_MAGIC)
 				break; /* for binary */
 		}
 
@@ -437,15 +515,20 @@ sysexec(va_list list)
 	}
 
 	/* Process a.out(6) header */
+	dyn = magic & DYN_MAGIC;
+	magic &= ~DYN_MAGIC;
 	if(magic & HDR_MAGIC) {
 		if(n < sizeof(u.ehdr))
 			error(Ebadexec);
 		entry = beswav(u.ehdr.hdr[0]);
-		text = UTZERO+sizeof(u.ehdr);
+		hsize = sizeof(u.ehdr);
 	} else {
 		entry = beswal(u.ehdr.entry);
-		text = UTZERO+sizeof(Exec);
+		hsize = sizeof(Exec);
 	}
+	if(dyn)
+		entry += UTZERO;
+	text = UTZERO+hsize;
 	if(entry < text)
 		error(Ebadexec);
 	text += beswal(u.ehdr.text);
@@ -573,6 +656,18 @@ sysexec(va_list list)
 		nargs = i+1;
 	}
 
+	/* Relocation table, checked before the commit */
+	rel = nil;
+	nrel = 0;
+	if(dyn)
+		rel = reltab(tc, text + data + beswal(u.ehdr.syms) + beswal(u.ehdr.spsz)
+			+ beswal(u.ehdr.pcsz), UTZERO+hsize, adata, adata+data,
+			(magic & HDR_MAGIC) != 0 ? 8 : 4, &nrel);
+	if(waserror()){
+		free(rel);
+		nexterror();
+	}
+
 	/* Attach text segment */
 	/* attachimage returns a locked cache image */
 	img = attachimage(tc, (PGROUND(text)+PGROUND(data))>>PGSHIFT);
@@ -636,6 +731,7 @@ sysexec(va_list list)
 	qunlock(&up->seglock);
 
 	poperror();	/* up->seglock */
+	poperror();	/* rel */
 	poperror();	/* args */
 	poperror();	/* tc */
 	poperror();	/* elem, file */
@@ -683,6 +779,16 @@ sysexec(va_list list)
 	 *  space and needs to be flushed
 	 */
 	flushmmu();
+
+	if(rel != nil){
+		if(waserror()){
+			free(rel);
+			pexit(Ebadexec, 1);
+		}
+		relocate(rel, nrel, UTZERO+hsize, UTZERO, (magic & HDR_MAGIC) != 0 ? 8 : 4);
+		poperror();
+		free(rel);
+	}
 
 	if(up->hang)
 		up->procctl = Proc_stopme;
