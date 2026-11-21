@@ -326,11 +326,9 @@ loads it at the start of user space,
 which the kernel may choose at boot,
 and applies the relocations,
 which must all lie in the data segment.
-Unless given
-.BR -T ,
-.B jl
-.B -u
-links executables this way.
+.B Jl
+links executables this way unless given
+.BR -T .
 .SH "SEE ALSO"
 .IR db (1), 
 .IR acid (1), 
