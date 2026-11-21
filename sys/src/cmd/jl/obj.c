@@ -139,6 +139,8 @@ main(int argc, char *argv[])
 		HEADR = 32L;
 		if (thechar == 'j')
 			HEADR += sizeof(vlong);	/* for virtual entry addr. */
+		if(INITTEXT == -1 && dlm)
+			INITTEXT = HEADR;	/* position independent: exec relocates */
 		if(INITTEXT == -1)
 			INITTEXT = 0x1000000000ULL + HEADR;
 		if(INITDAT == -1)
