@@ -37,18 +37,10 @@ kmapram(uintptr, uintptr limit)
 	if (Spew)print("%p is %p\n", sv57, sv57[0]);
 	sv48[0] = ((((u64int)sv39)>>2)) | 1;
 	/*
-	 * cover every GiB slot up to the end of RAM, not a fixed few:
-	 * pages the kernel can only reach through this identity map
-	 * (kaddr) fault if their slot is missing.  Keep at least the
-	 * first 6 slots for the low MMIO leaves, and stop at UZERO,
-	 * where user space begins.
-	 * TODO: handle more complex memory topologies.
+	 * identity-map every GiB slot below UZERO, where user space
+	 * begins: RAM and devices alike.
 	 */
-	n = (limit + 0x40000000ULL-1)/0x40000000ULL;
-	if(n < 6)
-		n = 6;
-	if(n > UZERO/0x40000000ULL)
-		n = UZERO/0x40000000ULL;
+	n = UZERO/0x40000000ULL;
 	for(i = 0; i < n; i++){
 		pa = 0x40000000ULL*i;
 		/*
@@ -84,8 +76,10 @@ kmapram(uintptr, uintptr limit)
 }
 
 void*
-vmap(uvlong pa, vlong)
+vmap(uvlong pa, vlong size)
 {
+	if(pa >= UZERO || size > UZERO - pa)
+		return nil;
 	return (void *)pa;
 }
 

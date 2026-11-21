@@ -6,6 +6,8 @@
 
 #define INITMAP	(ROUND((uintptr)end + BY2PG, PGLSZ(1)))
 
+uintptr uzero = ~0ULL;		/* no user space until meminit */
+
 void
 mmu0init(uintptr *l1)
 {
@@ -50,17 +52,30 @@ meminit(void)
 	char *p;
 	uintptr l = VDRAM + 2ULL * GiB;
 	extern u64int *sv57, *sv48, *sv39, *pGiB;
-	extern uintptr klimit;
 
 	if(p = getconf("*maxmem"))
 		l = strtoull(p, 0, 0);
 
 	// leave a big hole after end, for now. We need it for this and that.
 	conf.mem[0].base = ROUND(PGROUND((uintptr)end - KTZERO) + (uintptr)(VDRAM+0x2fffff), 0x200000);
-	conf.mem[0].limit = l;
 
-	if(l > KLIMIT)
-		l = KLIMIT;
+	/*
+	 * user space starts at the first root table slot above RAM,
+	 * not below 4 GiB; *uzero moves it.
+	 */
+	uzero = l;
+	if(p = getconf("*uzero"))
+		uzero = strtoull(p, 0, 0);
+	if(uzero < 4ULL*GiB)
+		uzero = 4ULL*GiB;
+	uzero = ROUND(uzero, PGLSZ(PTLEVELS-1));
+	if(uzero <= conf.mem[0].base || uzero >= USTKTOP-USTKSIZE)
+		panic("meminit: uzero %#p", uzero);
+	if(l > uzero)
+		l = uzero;
+	conf.mem[0].limit = l;
+	print("meminit: ram %#p-%#p uzero %#p\n", conf.mem[0].base, l, uzero);
+
 	sv57 = (void *)PGROUND((uintptr)end);
 	sv48 = (void *)PGROUND((uintptr)sv57 + 1);
 	sv39 = (void *)PGROUND((uintptr)sv48 + 1);
