@@ -8,6 +8,7 @@ ARCH=\
 	k3\
 	kw\
 	lx2k\
+	mpfs\
 	mt7688\
 	#mtx\
 	omap\
