@@ -39,12 +39,6 @@ kaddr(uintptr pa)
 	panic("kaddr: pa=%#p pc=%#p", pa, getcallerpc(&pa));
 }
 
-static void*
-kmapaddr(uintptr pa)
-{
-	return kaddr(pa);
-}
-
 KMap*
 kmap(Page *p)
 {

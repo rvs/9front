@@ -28,6 +28,7 @@ init0(void)
 {
 	char buf[2*KNAMELEN], **sp;
 	Page *p;
+	KMap *k;
 
 	print("chandevinit ...\n");
 	chandevinit();
@@ -47,11 +48,13 @@ init0(void)
 
 	p = newpage(USTKTOP-BY2PG, nil);
 	segpage(up->seg[SSEG], p);
-	sp = (char**)(p->pa + BY2PG - sizeof(Tos) - 8 - sizeof(sp[0])*4);
+	k = kmap(p);
+	sp = (char**)(VA(k) + BY2PG - sizeof(Tos) - 8 - sizeof(sp[0])*4);
 	print("sp is %p for usp %p\n", sp, sp);
 	sp[3] = sp[2] = sp[1] = nil;
 	strcpy(sp[1] = (char*)&sp[4], "boot");
 	sp[0] = (void*)&sp[1];
+	kunmap(k);
 
 	splhi();
 	fpukexit(nil, nil);
@@ -112,6 +115,9 @@ confinit(void)
 		conf.npage += conf.mem[i].npage;
 
 	kpages = conf.npage - (conf.npage*userpcnt)/100;
+	/* a bank of user pages beyond kaddr leaves the kernel all of the first */
+	if(conf.mem[1].npage != 0 && cankaddr(conf.mem[1].base) == 0)
+		kpages = conf.mem[0].npage;
 	/*
 	 * the pool allocators size in ulong bytes, so the kernel's
 	 * share must stay below 4 GiB or the arithmetic here and

@@ -70,3 +70,14 @@ meminit(void)
 
 	conf.mem[0].npage = (conf.mem[0].limit - conf.mem[0].base)/BY2PG;
 }
+
+/*
+ * Kernel address of a page of RAM, for kmap and the page-table
+ * walk: here the identity map covers all of it.  A SoC directory
+ * that keeps user pages outside it supplies its own mem.c.
+ */
+void*
+kmapaddr(uintptr pa)
+{
+	return kaddr(pa);
+}

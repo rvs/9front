@@ -74,6 +74,7 @@ extern void* kaddr(uintptr);
 #define KADDR(a) kaddr(a)
 extern void kmapinval(void);
 #define	VA(k)	((uintptr)(k))
+extern void* kmapaddr(uintptr);
 extern KMap *kmap(Page*);
 extern void kunmap(KMap*);
 extern uintptr mmukmap(uintptr, uintptr, usize);
