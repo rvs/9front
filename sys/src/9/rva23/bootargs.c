@@ -29,6 +29,7 @@ static char *confname[MAXCONF];
 static char *confval[MAXCONF];
 static int nconf;
 static char maxmem[32];
+static char usermem[48];
 static int bootargs_set = 0;
 static int preloadedini = 0;
 char *bootconf;			/* BOOTARGS; see mem.h */
@@ -437,7 +438,7 @@ findorallocuart(char *path)
 static void
 devtreeprop(char *path, char *key, void *val, int len)
 {
-	uvlong addr;
+	uvlong addr, size;
 	uchar *p = val;
 
 	if(path[0] == 0 && strcmp(key, "compatible") == 0){
@@ -458,6 +459,14 @@ devtreeprop(char *path, char *key, void *val, int len)
 			snprint(maxmem, sizeof(maxmem), "%#llux", addr);
 			print("devtreeprop: maxmem %s\n", maxmem);
 			addconf("*maxmem", maxmem);
+		}else if(findconf("*usermem") < 0 && len == 16){
+			/* a later bank above UZERO, for user pages: see meminit */
+			addr = (uvlong)beget4(p)<<32 | beget4(p+4);
+			size = (uvlong)beget4(p+8)<<32 | beget4(p+12);
+			if(addr >= UZERO){
+				snprint(usermem, sizeof(usermem), "%#llux %#llux", addr, addr+size);
+				addconf("*usermem", usermem);
+			}
 		}
 		return;
 	}

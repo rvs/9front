@@ -49,11 +49,32 @@ meminit(void)
 {
 	char *p;
 	uintptr l = VDRAM + 2ULL * GiB;
+	uintptr b, e;
 	extern u64int *sv57, *sv48, *sv39, *pGiB;
 	extern uintptr klimit;
 
 	if(p = getconf("*maxmem"))
 		l = strtoull(p, 0, 0);
+
+	/*
+	 * RAM above UZERO, which the board lets the kernel see below
+	 * UZERO (umemoff), holds only user pages: the kernel's identity
+	 * map ends where that window begins.
+	 */
+	if(umemoff != 0 && klimit > UZERO-umemoff)
+		klimit = UZERO-umemoff;
+	if(p = getconf("*usermem")){
+		b = PGROUND(strtoull(p, &p, 0));
+		e = strtoull(p, 0, 0) & -BY2PG;
+		if(e > UZERO+umemoff)
+			e = UZERO+umemoff;
+		if(b >= UZERO && b < e){
+			conf.mem[1].base = b;
+			conf.mem[1].limit = e;
+			conf.mem[1].npage = (e - b)/BY2PG;
+			print("meminit: user ram %#p-%#p\n", b, e);
+		}
+	}
 
 	// leave a big hole after end, for now. We need it for this and that.
 	conf.mem[0].base = ROUND(PGROUND((uintptr)end - KTZERO) + (uintptr)(VDRAM+0x2fffff), 0x200000);

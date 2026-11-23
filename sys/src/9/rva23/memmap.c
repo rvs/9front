@@ -36,6 +36,11 @@ kmapram(uintptr, uintptr limit)
 	sv57[0] = ((((u64int)sv48)>>2)) | 1;
 	if (Spew)print("%p is %p\n", sv57, sv57[0]);
 	sv48[0] = ((((u64int)sv39)>>2)) | 1;
+
+	/* user RAM above UZERO, at pa-umemoff (see meminit) */
+	for(pa = conf.mem[1].base & -0x40000000ULL; pa < conf.mem[1].limit; pa += 0x40000000ULL)
+		sv39[PTLX(pa - umemoff, 2)] = PA2PTE(pa) | 0xcf;
+
 	/*
 	 * cover every GiB slot up to the end of RAM, not a fixed few:
 	 * pages the kernel can only reach through this identity map

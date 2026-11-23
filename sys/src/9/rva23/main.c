@@ -47,7 +47,7 @@ init0(void)
 
 	p = newpage(USTKTOP-BY2PG, nil);
 	segpage(up->seg[SSEG], p);
-	sp = (char**)(p->pa + BY2PG - sizeof(Tos) - 8 - sizeof(sp[0])*4);
+	sp = (char**)((uintptr)KADDR(p->pa) + BY2PG - sizeof(Tos) - 8 - sizeof(sp[0])*4);
 	print("sp is %p for usp %p\n", sp, sp);
 	sp[3] = sp[2] = sp[1] = nil;
 	strcpy(sp[1] = (char*)&sp[4], "boot");
@@ -112,6 +112,9 @@ confinit(void)
 		conf.npage += conf.mem[i].npage;
 
 	kpages = conf.npage - (conf.npage*userpcnt)/100;
+	/* with a user bank, the kernel keeps all of the other one */
+	if(conf.mem[1].npage != 0)
+		kpages = conf.mem[0].npage;
 	/*
 	 * the pool allocators size in ulong bytes, so the kernel's
 	 * share must stay below 4 GiB or the arithmetic here and

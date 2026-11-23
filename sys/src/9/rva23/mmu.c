@@ -10,6 +10,14 @@ enum {
 
 #define INITMAP	(ROUND((uintptr)end + BY2PG, PGLSZ(1))-KZERO)
 
+/*
+ * Set by a board whose RAM goes on above UZERO, where user space keeps
+ * the kernel from mapping it at its own address: that RAM holds only
+ * user pages, and the kernel sees it at pa-umemoff, below UZERO.
+ * A multiple of 1 GiB.
+ */
+uintptr umemoff;
+
 // kmax will be computed dynamically in future; for now it is
 // UZERO.
 uintptr klimit = UZERO;
@@ -19,6 +27,8 @@ paddr(void *va)
 {
 	if((uintptr)va < KLIMIT)
 		return (uintptr)va;
+	if((uintptr)va >= UZERO-umemoff && (uintptr)va < UZERO)
+		return (uintptr)va + umemoff;
 	panic("paddr: va=%#p pc=%#p", va, getcallerpc(&va));
 }
 
@@ -36,6 +46,8 @@ kaddr(uintptr pa)
 {
 	if(pa < (uintptr)KLIMIT)
 		return (void*)(pa);
+	if(pa >= UZERO && pa - UZERO < umemoff)
+		return (void*)(pa - umemoff);
 	panic("kaddr: pa=%#p pc=%#p", pa, getcallerpc(&pa));
 }
 
