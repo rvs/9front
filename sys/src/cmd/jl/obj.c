@@ -232,6 +232,8 @@ main(int argc, char *argv[])
 		else
 			doprof2();
 	dodata();
+	if(dlm && debug['k'])
+		relocode();
 	follow();
 	if(firstp == P)
 		goto out;

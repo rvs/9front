@@ -248,6 +248,113 @@ dodata(void)
 	xdefine("etext", STEXT, 0L);
 }
 
+/*
+ * Position independent executables without a relocation table:
+ * a new entry point _reloc stores the run-time address of every
+ * pointer initializer into its data word, then jumps to the old
+ * entry.  The stores address text and data pc-relative or off
+ * R3, so they are right wherever exec loads the program.
+ */
+static Prog*
+relins(Prog *l, int as)
+{
+	Prog *q;
+
+	q = prg();
+	q->as = as;
+	q->line = l->line;
+	q->pc = pc++;
+	l->link = q;
+	return q;
+}
+
+void
+relocode(void)
+{
+	Prog *p, *q, *t, *e, *l;
+	Sym *s, *m;
+	int n;
+
+	m = lookup(INITENTRY, 0);
+	if(m->type != STEXT) {
+		diag("entry not text: %s", m->name);
+		return;
+	}
+	for(e = textp; e != P; e = e->cond)
+		if(e->from.sym == m)
+			break;
+	if(e == P) {
+		diag("entry not found: %s", m->name);
+		return;
+	}
+	s = lookup("_reloc", 0);
+	if(s->type != 0 && s->type != SXREF) {
+		diag("redefinition: %s", s->name);
+		return;
+	}
+	for(l = firstp; l->link != P; l = l->link)
+		;
+	s->type = STEXT;
+	s->value = pc;
+	t = relins(l, ATEXT);
+	t->from.type = D_OREG;
+	t->from.name = D_EXTERN;
+	t->from.sym = s;
+	t->reg = NOPROF;
+	t->to.type = D_CONST;
+	t->to.offset = -ptrsize;
+	etextp->cond = t;
+	etextp = t;
+
+	q = relins(t, AMOV);
+	q->from.type = D_CONST;
+	q->from.name = D_EXTERN;
+	q->from.sym = lookup("setSB", 0);
+	q->to.type = D_REG;
+	q->to.reg = REGSB;
+
+	n = 0;
+	for(p = datap; p != P; p = p->link) {
+		if(p->to.type != D_CONST || p->to.sym == S)
+			continue;
+		switch(p->to.sym->type) {
+		default:
+			continue;
+		case STEXT:
+		case SLEAF:
+		case SSTRING:
+		case SDATA:
+		case SBSS:
+			break;
+		}
+		if(p->reg != 8)
+			diag("relocated datum not a vlong\n%P", p);
+		if(p->from.sym->type == SSTRING)
+			diag("relocated datum in string segment\n%P", p);
+		q = relins(q, AMOV);
+		q->from = p->to;
+		q->from.class = 0;
+		q->to.type = D_REG;
+		q->to.reg = 9;	/* R8 holds _tos */
+		q = relins(q, AMOV);
+		q->from.type = D_REG;
+		q->from.reg = 9;
+		q->to = p->from;
+		q->to.type = D_OREG;
+		q->to.class = 0;
+		n++;
+	}
+
+	q = relins(q, AJMP);
+	q->to.type = D_BRANCH;
+	q->to.sym = m;
+	q->cond = e;
+	lastp = q;
+	INITENTRY = s->name;
+	if(debug['v'])
+		Bprint(&bso, "%5.2f relocation stores = %d\n", cputime(), n);
+}
+
 void
 undef(void)
 {

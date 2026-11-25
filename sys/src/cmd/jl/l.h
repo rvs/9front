@@ -345,6 +345,7 @@ void	putsymb(char*, int, vlong, int);
 long	regoff(Adr*);
 int		classreg(Adr*);
 int	relinv(int);
+void	relocode(void);
 int relrev(int);
 vlong	rnd(vlong, vlong);
 void	span(void);
