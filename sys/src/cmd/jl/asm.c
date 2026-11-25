@@ -38,7 +38,7 @@ asmb(void)
 	 * (datblk adds INITTEXT/INITDAT to sym-bearing values);
 	 * code is entirely pc-relative.  record a fixup for each.
 	 */
-	if(dlm && !debug['k'])
+	if(dlm && !(debug['k'] && HEADTYPE == 2))
 		for(p = datap; p != P; p = p->link)
 			if((p->to.type == D_CONST || p->to.type == D_VCONST) && p->to.sym != S)
 				switch(p->to.sym->type){

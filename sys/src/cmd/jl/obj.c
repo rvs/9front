@@ -232,7 +232,7 @@ main(int argc, char *argv[])
 		else
 			doprof2();
 	dodata();
-	if(dlm && debug['k'])
+	if(dlm && debug['k'] && HEADTYPE == 2)
 		relocode();
 	follow();
 	if(firstp == P)

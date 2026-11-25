@@ -255,6 +255,22 @@ dodata(void)
  * entry.  The stores address text and data pc-relative or off
  * R3, so they are right wherever exec loads the program.
  */
+static int
+isrel(Prog *p)
+{
+	if(p->to.type != D_CONST || p->to.sym == S)
+		return 0;
+	switch(p->to.sym->type) {
+	case STEXT:
+	case SLEAF:
+	case SSTRING:
+	case SDATA:
+	case SBSS:
+		return 1;
+	}
+	return 0;
+}
+
 static Prog*
 relins(Prog *l, int as)
 {
@@ -275,17 +291,21 @@ relocode(void)
 	Sym *s, *m;
 	int n;
 
-	m = lookup(INITENTRY, 0);
-	if(m->type != STEXT) {
-		diag("entry not text: %s", m->name);
-		return;
-	}
-	for(e = textp; e != P; e = e->cond)
-		if(e->from.sym == m)
+	for(p = datap; p != P; p = p->link)
+		if(isrel(p))
 			break;
-	if(e == P) {
-		diag("entry not found: %s", m->name);
+	if(p == P)
 		return;
+	m = lookup(INITENTRY, 0);
+	e = textp;	/* an undefined entry is the start of text */
+	if(m->type != 0) {
+		for(; e != P; e = e->cond)
+			if(e->from.sym == m)
+				break;
+		if(e == P) {
+			diag("entry not text: %s", m->name);
+			return;
+		}
 	}
 	s = lookup("_reloc", 0);
 	if(s->type != 0 && s->type != SXREF) {
@@ -315,18 +335,8 @@ relocode(void)
 
 	n = 0;
 	for(p = datap; p != P; p = p->link) {
-		if(p->to.type != D_CONST || p->to.sym == S)
+		if(!isrel(p))
 			continue;
-		switch(p->to.sym->type) {
-		default:
-			continue;
-		case STEXT:
-		case SLEAF:
-		case SSTRING:
-		case SDATA:
-		case SBSS:
-			break;
-		}
 		if(p->reg != 8)
 			diag("relocated datum not a vlong\n%P", p);
 		if(p->from.sym->type == SSTRING)
@@ -347,7 +357,7 @@ relocode(void)
 
 	q = relins(q, AJMP);
 	q->to.type = D_BRANCH;
-	q->to.sym = m;
+	q->to.sym = e->from.sym;
 	q->cond = e;
 	lastp = q;
 	INITENTRY = s->name;
