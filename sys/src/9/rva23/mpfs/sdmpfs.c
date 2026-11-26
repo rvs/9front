@@ -11,6 +11,7 @@
 #include "mem.h"
 #include "dat.h"
 #include "fns.h"
+#include "mpfsfns.h"
 #include "io.h"
 #include "../port/sd.h"
 
@@ -137,9 +138,13 @@ static int
 mpfsinit(SDio*)
 {
 	u32int *r, pwr, cap;
+	Dtbnode *n;
 	int i;
 
 	ctlr.irq = Mmcirq;
+	n = dtbfind("microchip,mpfs-sd4hc", Mmcbase);
+	if(n == nil || !n->ok)
+		return -1;
 	r = vmap(Mmcbase, 0x1000);
 	if(r == nil)
 		return -1;

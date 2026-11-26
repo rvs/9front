@@ -35,7 +35,7 @@ ip
 misc
 	sdmmc	sdmpfs
 	uarti8250
-	mpfsboard
+	socmpfs
 
 port
 	int cpuserver = 0;

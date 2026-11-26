@@ -47,6 +47,11 @@ static Lock rtclock;
 static void
 rtcinit(void)
 {
+	Dtbnode *n;
+
+	n = dtbfind("microchip,mpfs-rtc", Rtcbase);
+	if(n == nil || !n->ok)
+		return;
 	regs = vmap(Rtcbase, 0x1000);
 	if(regs == nil)
 		return;

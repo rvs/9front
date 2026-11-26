@@ -2,13 +2,14 @@
  * Cadence GEM on the Microchip PolarFire SoC, SGMII to an external
  * PHY.  The U54s cannot clean or invalidate the cache by address, so
  * the descriptor rings and packet buffers live in the non-cached DDR
- * window (NCDMABASE) and frames are copied through them.
+ * window (ncalloc) and frames are copied through them.
  */
 #include "u.h"
 #include "../port/lib.h"
 #include "mem.h"
 #include "dat.h"
 #include "fns.h"
+#include "mpfsfns.h"
 #include "io.h"
 #include "../port/error.h"
 #include "../port/netif.h"
