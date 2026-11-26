@@ -439,15 +439,18 @@ int	gotipi;
 int	hartcnt;
 uintptr	memtotal;	/* sum of all banks */
 /*
- * SoC support module, registered from its conf link entry;
- * the first whose compat prefixes a DT root compatible is used.
+ * SoC support module, listed in the conf as misc soc*;
+ * archinit picks the first whose compat prefixes a DT root compatible.
  */
 struct Socmod {
+	char	*id;
 	char	*compat;
 	void	(*init)(void);		/* from archinit */
 	void	(*reset)(void);		/* return to fall back on SBI */
 	void	(*poweroff)(void);
 };
+
+extern Socmod *socmod;
 
 uintptr	mideleg, medeleg;
 uintptr	misa;

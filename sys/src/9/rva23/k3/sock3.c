@@ -19,13 +19,8 @@ k3init(void)
 	dpuk3com260();
 }
 
-static Socmod k3mod = {
+Socmod sock3 = {
+	"k3",
 	"spacemit,k3",
 	k3init,
 };
-
-void
-k3link(void)
-{
-	addsocmod(&k3mod);
-}

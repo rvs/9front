@@ -1,8 +1,8 @@
 # SoC support modules.  Each lives in ../rva23/<module>, compiles
 # against the including kernel's headers (-I.), and is linked in by
-# its conf link entry, which registers its Socmod:
-#	link
-#		k1	k1reset k1thermal
+# its conf misc entry, which also puts its Socmod in knownsoc[]:
+#	misc
+#		sock1	k1reset k1thermal
 # Object names are shared across modules; mk refuses duplicates.
 
 %.$O:	../rva23/k1/%.c

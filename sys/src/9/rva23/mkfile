@@ -73,7 +73,6 @@ OBJ=\
 	sbi.$O\
 	sbicall.$O\
 	sbiecall.$O\
-	board.$O\
 	fan.$O\
 	$CONF.root.$O\
 	$CONF.rootc.$O\

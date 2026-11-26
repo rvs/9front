@@ -14,15 +14,10 @@ k1init(void)
 	k1thermalinit();
 }
 
-static Socmod k1mod = {
+Socmod sock1 = {
+	"k1",
 	"spacemit,k1",
 	k1init,
 	k1reset,
 	k1poweroff,
 };
-
-void
-k1link(void)
-{
-	addsocmod(&k1mod);
-}

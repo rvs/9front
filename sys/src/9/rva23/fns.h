@@ -198,12 +198,6 @@ extern int gpioin(uint pin);
 void gpiointrenable(uint pin, int mode, void (*f)(uint pin, void *a), void *a);
 void gpiointrdisable(uint pin);
 
-/* board */
-extern void addsocmod(Socmod*);
-extern void boardinit(void);
-extern void boardreset(void);
-extern void boardpoweroff(void);
-
 /* screen.c */
 extern void screeninit(void);
 extern void screenfb(uvlong pa, void *va);
