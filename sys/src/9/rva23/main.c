@@ -354,8 +354,8 @@ exit(int)
 		poolreset(secrmem);
 	}
 	sbireset(1, 0);		/* SRSTCOLD: works on QEMU; ignored on K1 */
-	if (rvreset)
-		rvreset();	/* board-specific reset, e.g. K1 WDT */
+	if(socmod != nil && socmod->reset != nil)
+		socmod->reset();
 	sbireset(2, 0);		/* SRSTWARM */
 	sbishutdown();		/* legacy ext 8 */
 	for(;;)
@@ -372,8 +372,8 @@ poweroff(void)
 		poolreset(secrmem);
 	}
 	sbireset(0, 0);		/* SRSTSHUT: works on QEMU; ignored on K1 */
-	if (rvpoweroff)
-		rvpoweroff();	/* board-specific, e.g. K1 PMIC shutdown */
+	if(socmod != nil && socmod->poweroff != nil)
+		socmod->poweroff();
 	sbishutdown();		/* legacy ext 8 */
 	for(;;)
 		;
