@@ -197,6 +197,8 @@ extern void gpioout(uint pin, int set);
 extern int gpioin(uint pin);
 void gpiointrenable(uint pin, int mode, void (*f)(uint pin, void *a), void *a);
 void gpiointrdisable(uint pin);
+extern void addgpio(Gpioifc*);
+extern void gpionames(Gpiopin*, int);
 
 /* screen.c */
 extern void screeninit(void);

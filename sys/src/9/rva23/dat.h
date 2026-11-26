@@ -20,6 +20,8 @@ enum {
 };
 
 typedef struct Socmod	Socmod;
+typedef struct Gpioifc	Gpioifc;
+typedef struct Gpiopin	Gpiopin;
 typedef struct Clint Clint;
 typedef struct Conf	Conf;
 typedef struct Confmem	Confmem;
@@ -451,6 +453,22 @@ struct Socmod {
 };
 
 extern Socmod *socmod;
+
+/* a GPIO controller, registered with addgpio */
+struct Gpioifc {
+	char	*name;
+	int	npin;
+	void	(*out)(uint, int);
+	int	(*in)(uint);
+	void	(*intrenable)(uint, int, void (*)(uint, void*), void*);
+	void	(*intrdisable)(uint);
+};
+
+/* a board's name for a pin, the #G/gpio file name */
+struct Gpiopin {
+	int	pin;
+	char	*name;
+};
 
 uintptr	mideleg, medeleg;
 uintptr	misa;
