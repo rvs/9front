@@ -2,9 +2,9 @@ CONF=bvf
 CONFLIST=bvf bvfcpuwait
 
 # Microchip PolarFire SoC (BeagleV-Fire): the generic kernel in
-# ../rva23 for the U54 harts, with their hart and PLIC layout (mem.h),
-# timer without Sstc (timecmp.c), cache ops without Zicbom (cbo.c) and
-# no PCI host (nopci.c).  The SoC's drivers are the ../rva23/mpfs
+# ../rva23 for the U54 harts, with their hart layout and load offset (mem.h)
+# and no PCI host (nopci.c).  The device tree tells the kernel that the
+# U54s lack Sstc and Zicbom.  The SoC's drivers are the ../rva23/mpfs
 # module (socmpfs in the conf).  The HSS and u-boot's booti start it
 # in place at 0x80200000 on hart 1.
 loadaddr=0x80200000
@@ -130,6 +130,8 @@ memmap.$O:	../rva23/memmap.c
 
 l.$O:	l.s ../rva23/l.s
 	$AS $AFLAGS -I. -I../rva23 l.s
+timecmp.$O:	../rva23/timecmp.s
+	$AS $AFLAGS -I. -I../rva23 -. ../rva23/timecmp.s
 cas.$O:	../rva23/cas.s
 	$AS $AFLAGS -I. -I../rva23 -. ../rva23/cas.s
 strap.$O:	../rva23/strap.s
