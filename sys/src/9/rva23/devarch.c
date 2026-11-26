@@ -287,8 +287,7 @@ archreset(void)
 		prstackmax();
 	delay(20);
 iprint("arch-specific reset...");
-	if (rvreset)
-		rvreset();
+	boardreset();
 	if (!nosbi && m->machno == 0) {
 		if (soc.havesbisrst) {
 			iprint("sbi cold reboot...");

@@ -31,11 +31,13 @@ dev
 	dtracy
 
 link
+	k1	k1reset k1thermal
+	k3	gpiok3 k3thermal espik3 espik3fan screenpicoitx screencom260
 	usbxhcipci	pci usbxhci
 	usbxhcibpif3	usbxhci
 	usbxhcipicoitx	usbxhci
 	usbxhcicom260	usbxhci
-	sdspacemit
+	sdspacemit	k1reset
 	i2ck3
 	ethervirtio10 virtio10mem pci
 #	ethersink

@@ -19,6 +19,7 @@ enum {
 	GpioEdge,
 };
 
+typedef struct Socmod	Socmod;
 typedef struct Clint Clint;
 typedef struct Conf	Conf;
 typedef struct Confmem	Confmem;
@@ -437,6 +438,17 @@ uchar	ether0mac[];
 int	gotipi;
 int	hartcnt;
 uintptr	memtotal;	/* sum of all banks */
+/*
+ * SoC support module, registered from its conf link entry;
+ * the first whose compat prefixes a DT root compatible is used.
+ */
+struct Socmod {
+	char	*compat;
+	void	(*init)(void);		/* from archinit */
+	void	(*reset)(void);		/* return to fall back on SBI */
+	void	(*poweroff)(void);
+};
+
 uintptr	mideleg, medeleg;
 uintptr	misa;
 int	nosbi;
@@ -446,8 +458,6 @@ uvlong	pagingmode; /* set from PAGINGMODE, not really selectable at run time */
 int	probehartid;
 int	probingharts;
 void	(*prstackmax)(void);
-void	(*rvreset)(void);
-void	(*rvpoweroff)(void);
 /* server soc spec. requires 1 GHz clint timer, thus timebase */
 uvlong	timebase;	/* from kernel config */
 vlong	uartfreq;	/* from kernel config */

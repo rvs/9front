@@ -21,6 +21,7 @@
 #include "dat.h"
 #include "fns.h"
 #include "k1.h"
+#include "k1fns.h"
 
 static int
 twsiwait(u32int *t, ulong bit)
@@ -129,7 +130,7 @@ k1pmicreset(void)
 	delay(1000);
 }
 
-static void
+void
 k1poweroff(void)
 {
 	int v;
@@ -152,7 +153,7 @@ k1wdtwrite(u32int *wdt, uintptr off, ulong val)
 	coherence();
 }
 
-static void
+void
 k1reset(void)
 {
 	u32int *wdt, *mpmu, *apmu;
@@ -199,6 +200,3 @@ k1reset(void)
 
 	delay(5000);
 }
-
-void (*rvreset)(void) = k1reset;
-void (*rvpoweroff)(void) = k1poweroff;
