@@ -232,6 +232,8 @@ extern Dtbether *dtbether(int);
 extern int dtbnufs(void);
 extern Dtbufs *dtbufs(int);
 extern int dtbsocmatch(char*);
+extern Dtbnode *dtbfind(char*, uvlong);
+extern int dtblisthas(char*, int, char*);
 
 // new
 void wsatp(u64int);

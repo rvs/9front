@@ -501,9 +501,6 @@ gpiok3init(void)
 	u32int *apbc;
 	u32int v;
 
-	if(!dtbsocmatch("spacemit,k3"))
-		return;
-
 	gpiobase = (uintptr)vmap(GpioPhys, GpioSize);
 	if(gpiobase == 0)
 		return;

@@ -1096,11 +1096,6 @@ etherpnp(Ether *edev)
 		return -1;
 	}
 
-	if(!dtbsocmatch("spacemit,k3")){
-		dprint("dwqe: not a K3, skipping\n");
-		return -1;
-	}
-
 	de = nil;
 	n = dtbnether();
 	/* Walk through the array, but skip ones that are not ok.
@@ -1109,7 +1104,9 @@ etherpnp(Ether *edev)
 	 * becomes ether0. */
 	for(i = 0; i < n; i++){
 		Dtbether *d = dtbether(i);
-		if(d != nil  && d->ok && strstr(d->compatible, "spacemit,k3-gmac") != nil) {
+		/* vendor spacemit,k3-gmac, mainline spacemit,k3-dwmac */
+		if(d != nil && d->ok && strncmp(d->compatible, "spacemit,k3-", 12) == 0
+		&& (strstr(d->compatible, "gmac") != nil || strstr(d->compatible, "dwmac") != nil)){
  			d->aliasidx = edev->ctlrno;
 			de = d;
 			break;
@@ -1125,14 +1122,6 @@ etherpnp(Ether *edev)
 		print("dwqe: ether%d from DTB %s base=%#llux size=%#llux apmu=%#llux+{%#ux,%#ux} irq=%d\n",
 			edev->ctlrno, de->path, base, size, apmubase,
 			ct->apmuctrloff, ct->apmudlineoff, irq);
-	} else if(edev->ctlrno == 0 && n == 0){
-		base     = Gmac0Phys;
-		size     = Gmac0Size;
-		apmubase = ApmuPhys;
-		irq      = Gmac0Irq;
-		ct->apmuctrloff  = 0x3e4/4;
-		ct->apmudlineoff = 0x3e8/4;
-		print("dwqe: no DTB, using K3 ether0 defaults\n");
 	} else {
 		dprint("dwqe: no DTB entry for ether%d\n", edev->ctlrno);
 		return -1;
