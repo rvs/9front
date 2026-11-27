@@ -36,6 +36,7 @@
 #include <time.h>
 #include <unistd.h>
 #include <string.h>
+#include <stdlib.h>
 
 static	char	dmsize[12] =
 {
@@ -53,6 +54,7 @@ static	void	ct_numb(char*, int);
 static	void	readtimezone(void);
 static	int	rd_name(char**, char*);
 static	int	rd_long(char**, long*);
+static	int	rdposixtz(char*);
 
 #define	TZSIZE	150
 
@@ -234,6 +236,10 @@ readtimezone(void)
 	char buf[TZSIZE*11+30], *p;
 	int i;
 
+	memset(&tz, 0, sizeof(tz));
+	p = getenv("TZ");
+	if(p != NULL && *p != 0 && rdposixtz(p) == 0)
+		return;
 	memset(buf, 0, sizeof(buf));
 	i = open("/env/timezone", 0);
 	if(i < 0)
@@ -317,5 +323,79 @@ rd_long(char **f, long *p)
 	if(s)
 		l = -l;
 	*p = l;
+	return 0;
+}
+
+/* POSIX TZ offset [+-]hh[:mm[:ss]], positive west of Greenwich */
+static int
+rdposixoff(char **f, long *o)
+{
+	char *p;
+	long h, m, sec;
+	int neg;
+
+	p = *f;
+	neg = 0;
+	if(*p == '+' || *p == '-')
+		neg = *p++ == '-';
+	if(*p < '0' || *p > '9')
+		return 1;
+	h = strtol(p, &p, 10);
+	m = sec = 0;
+	if(*p == ':'){
+		m = strtol(p+1, &p, 10);
+		if(*p == ':')
+			sec = strtol(p+1, &p, 10);
+	}
+	*o = h*3600 + m*60 + sec;
+	if(!neg)
+		*o = -*o;
+	*f = p;
+	return 0;
+}
+
+static int
+rdposixname(char **f, char *n)
+{
+	char *p;
+	int i, c;
+
+	p = *f;
+	i = 0;
+	if(*p == '<'){
+		for(p++; *p != '>'; p++){
+			if(*p == 0)
+				return 1;
+			if(i < 3)
+				n[i++] = *p;
+		}
+		p++;
+	}else
+		for(; (c = *p) >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z'; p++)
+			if(i < 3)
+				n[i++] = c;
+	n[i] = 0;
+	*f = p;
+	return i < 3;
+}
+
+/*
+ * TZ=std offset [dst [offset]] [,rule].
+ * Rules for daylight time are not supported:
+ * standard time is used all year.
+ */
+static int
+rdposixtz(char *p)
+{
+	if(*p == ':')
+		return 1;
+	if(rdposixname(&p, tz.stname) || rdposixoff(&p, &tz.stdiff)){
+		if(strcmp(tz.stname, "UTC") != 0 && strcmp(tz.stname, "GMT") != 0)
+			return 1;
+		tz.stdiff = 0;
+	}
+	tz.dldiff = tz.stdiff;
+	strcpy(tz.dlname, tz.stname);
+	tz.dlpairs[0] = 0;
 	return 0;
 }
