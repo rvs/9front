@@ -70,6 +70,8 @@ waitstatus(Waitmsg *w)
 		}
 		if(*bp == 0)
 			bp = w->msg;
+		while(*bp == ' ')
+			bp++;
 		r = strtol(bp, &ep, 10);
 		if(*ep == 0){
 			if(r < 0 || r >= 256)
