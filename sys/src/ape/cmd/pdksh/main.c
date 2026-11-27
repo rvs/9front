@@ -703,7 +703,7 @@ quitenv(void)
 				if (sig == SIGINT || sig == SIGTERM) {
 					setsig(&sigtraps[sig], SIG_DFL,
 						SS_RESTORE_CURR|SS_FORCE);
-					kill(0, sig);
+					kill(getpid(), sig);
 				}
 			}
 #ifdef MEM_DEBUG
