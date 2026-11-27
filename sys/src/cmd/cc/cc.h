@@ -581,6 +581,8 @@ void	macund(void);
  * dcl.c
  */
 Node*	doinit(Sym*, Type*, long, Node*);
+Node*	complit(Type*, Node*);
+void	symadjust(Sym*, Node*, long);
 Type*	tcopy(Type*);
 Node*	init1(Sym*, Type*, long, int);
 Node*	newlist(Node*, Node*);

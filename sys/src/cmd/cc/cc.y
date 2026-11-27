@@ -672,11 +672,10 @@ xuexpr:
 		$$->type = lastdcl;
 		$$->xcast = 1;
 	}
-|	'(' tlist abdecor ')' '{' ilist '}'	/* extension */
+|	'(' tlist abdecor ')' '{' ilist '}'
 	{
-		$$ = new(OSTRUCT, $6, Z);
 		dodecl(NODECL, CXXX, $2, $3);
-		$$->type = lastdcl;
+		$$ = complit(lastdcl, $6);
 	}
 
 uexpr:

@@ -458,7 +458,7 @@ init1(Sym *s, Type *t, long o, int exflag)
 			a = peekinit();
 			if(a == Z)
 				break;
-			if(a->op == OELEM && t->link->etype != TSTRUCT)
+			if(a->op == OELEM && (t->link->etype != TSTRUCT || exflag))
 				break;
 			if(a->op == OARRAY) {
 				if(e && exflag)
@@ -520,7 +520,7 @@ init1(Sym *s, Type *t, long o, int exflag)
 				nextinit();
 			}
 			if(t1->nbits && (bitoff != t1->offset || !bitagg)) {
-				if(a->op == OELEM && bitoff != -1)
+				if(a->op == OELEM && bitoff != -1 && s->class != CAUTO)
 					diag(a, "named bitfield static initializers not supported %F", a);
 				if(bitagg)
 					gextern(s, bitagg, o+bitaggt->offset, bitaggt->width);
@@ -533,11 +533,16 @@ init1(Sym *s, Type *t, long o, int exflag)
 			a = peekinit();
 			if(a == Z)
 				break;
-			if(a->op == OELEM)
+			if(a->op == OELEM) {
+				/* a designator ends an unbraced member */
+				if(exflag)
+					goto out;
 				goto again;
+			}
 		}
 		if(a && a->op == OELEM)
 			diag(a, "structure element not found %F", a);
+	out:
 		if(bitoff != -1) {
 			if(bitagg)
 				gextern(s, bitagg, o+bitaggt->offset, bitaggt->width);
@@ -545,6 +550,84 @@ init1(Sym *s, Type *t, long o, int exflag)
 		}
 		return l;
 	}
+}
+
+static Node*
+list2comma(Node *n)
+{
+	if(n != Z && n->op == OLIST)
+		return new(OCOMMA, list2comma(n->left), list2comma(n->right));
+	return n;
+}
+
+/*
+ * compound literal (t){a} in a function:
+ * an unnamed auto, zeroed by copying an
+ * unnamed static, then initialized.
+ */
+Node*
+complit(Type *t, Node *a)
+{
+	Sym *s, *z;
+	Node *n, *l, *r;
+	Type *zt;
+	long w, v;
+	static int ncl;
+
+	if(autobn == 0 || t == T || t->etype == TFUNC) {
+		n = new(OSTRUCT, a, Z);
+		n->type = t;
+		return n;
+	}
+	ncl++;
+	snprint(symb, NSYMB, ".cl%d", ncl);
+	s = lookup();
+	adecl(CAUTO, t, s);
+	s->aused = 1;
+	s->varlineno = lineno;
+	w = t->width;
+	v = s->offset;
+	n = doinit(s, t, 0L, new(OINIT, invert(a), Z));
+	if(t->width != w) {
+		/* array sized by its initializer */
+		autoffset = align(autoffset, t, Aaut3);
+		s->offset = -autoffset;
+		stkoff = maxround(stkoff, autoffset);
+		if(n != Z)
+			symadjust(s, n, v - s->offset);
+	}
+
+	l = new(ONAME, Z, Z);
+	l->sym = s;
+	l->type = t;
+	l->etype = t->etype;
+	l->xoffset = s->offset;
+	l->class = CAUTO;
+
+	if(typesu[t->etype] || t->etype == TARRAY) {
+		zt = t;
+		if(t->etype == TARRAY) {
+			zt = typ(TSTRUCT, T);
+			zt->width = t->width;
+		}
+		snprint(symb, NSYMB, ".clz%d", ncl);
+		z = lookup();
+		z->type = zt;
+		z->class = CSTATIC;
+		z->offset = 0;
+		r = new(ONAME, Z, Z);
+		r->sym = z;
+		r->type = zt;
+		r->etype = zt->etype;
+		r->class = CSTATIC;
+		r = new(OAS, new(ONAME, Z, Z), r);
+		*r->left = *l;
+		r->left->type = zt;
+		r->left->etype = zt->etype;
+		n = newlist(r, n);
+	}
+	/* *(init, &tmp) keeps it an lvalue */
+	return new(OIND, list2comma(newlist(n, new(OADDR, l, Z))), Z);
 }
 
 Node*
