@@ -19,29 +19,29 @@ typedef int sig_atomic_t;
 #define	SIGINT	2	/* interrupt */
 #define	SIGQUIT	3	/* quit */
 #define	SIGILL	4	/* illegal instruction (not reset when caught)*/
-#define SIGABRT 5	/* used by abort */
-#define	SIGFPE	6	/* floating point exception */
-#define	SIGKILL	7	/* kill (cannot be caught or ignored) */
-#define	SIGSEGV	8	/* segmentation violation */
-#define	SIGPIPE	9	/* write on a pipe with no one to read it */
-#define	SIGALRM	10	/* alarm clock */
-#define	SIGTERM	11	/* software termination signal from kill */
-#define	SIGUSR1	12	/* user defined signal 1 */
-#define	SIGUSR2	13	/* user defined signal 2 */
-#define	SIGBUS	14	/* bus error */
+#define SIGABRT 6	/* used by abort */
+#define	SIGBUS	7	/* bus error */
+#define	SIGFPE	8	/* floating point exception */
+#define	SIGKILL	9	/* kill (cannot be caught or ignored) */
+#define	SIGUSR1	10	/* user defined signal 1 */
+#define	SIGSEGV	11	/* segmentation violation */
+#define	SIGUSR2	12	/* user defined signal 2 */
+#define	SIGPIPE	13	/* write on a pipe with no one to read it */
+#define	SIGALRM	14	/* alarm clock */
+#define	SIGTERM	15	/* software termination signal from kill */
 
 /* The following symbols must be defined, but the signals needn't be supported */
-#define SIGCHLD	15	/* child process terminated or stopped */
-#define SIGCONT 16	/* continue if stopped */
-#define SIGSTOP 17	/* stop */
-#define SIGTSTP	18	/* interactive stop */
-#define SIGTTIN	19	/* read from ctl tty by member of background */
-#define SIGTTOU	20	/* write to ctl tty by member of background */
-#define SIGVTALRM 21 /* virtual alarm clock */
-#define SIGPROF 22  /* profiling alarm clock */
+#define SIGCHLD	17	/* child process terminated or stopped */
+#define SIGCONT 18	/* continue if stopped */
+#define SIGSTOP 19	/* stop */
+#define SIGTSTP	20	/* interactive stop */
+#define SIGTTIN	21	/* read from ctl tty by member of background */
+#define SIGTTOU	22	/* write to ctl tty by member of background */
+#define SIGVTALRM 26 /* virtual alarm clock */
+#define SIGPROF 27  /* profiling alarm clock */
 
 #ifdef _BSD_EXTENSION
-#define NSIG 23
+#define NSIG 28
 #endif
 
 #ifdef __cplusplus

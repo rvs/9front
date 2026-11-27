@@ -8,32 +8,33 @@
 
 /* Table is indexed by signal number
  *
- * The script siglist.sh generates siglist.out, which is a sorted, complete
- * list of signals
+ * Unused signal numbers get their number in inittraps.
  */
 Trap sigtraps[SIGNALS+1] = {
-	{ SIGEXIT_, "EXIT", "Signal 0" },
-	{ 1 , "HUP", "Hangup" },
-	{ 2 , "INT", "Interrupt" },
-	{ 3 , "QUIT", "Quit" },
-	{ 4 , "ILL", "Illegal instruction" },
-	{ 5 , "ABRT", "Abort" },
-	{ 6 , "FPE", "Floating point exception" },
-	{ 7 , "KILL", "Killed" },
-	{ 8 , "SEGV", "Memory fault" },
-	{ 9 , "PIPE", "Broken pipe" },
-	{ 10 , "ALRM", "Alarm clock" },
-	{ 11 , "TERM", "Terminated" },
-	{ 12 , "USR1", "User defined signal 1" },
-	{ 13 , "USR2", "User defined signal 2" },
-	{ 14 , "BUS", "Bus error" },
-	{ 15 , "CHLD", "Child exited" },
-	{ 16 , "CONT", "Continued" },
-	{ 17 , "STOP", "Stopped (signal)" },
-	{ 18 , "TSTP", "Stopped" },
-	{ 19 , "TTIN", "Stopped (tty input)" },
-	{ 20 , "TTOU", "Stopped (tty output)" },
-	{ SIGERR_,  "ERR",  "Error handler" },
+	[SIGEXIT_] { SIGEXIT_, "EXIT", "Signal 0" },
+	[SIGHUP] { SIGHUP, "HUP", "Hangup" },
+	[SIGINT] { SIGINT, "INT", "Interrupt" },
+	[SIGQUIT] { SIGQUIT, "QUIT", "Quit" },
+	[SIGILL] { SIGILL, "ILL", "Illegal instruction" },
+	[SIGABRT] { SIGABRT, "ABRT", "Abort" },
+	[SIGBUS] { SIGBUS, "BUS", "Bus error" },
+	[SIGFPE] { SIGFPE, "FPE", "Floating point exception" },
+	[SIGKILL] { SIGKILL, "KILL", "Killed" },
+	[SIGUSR1] { SIGUSR1, "USR1", "User defined signal 1" },
+	[SIGSEGV] { SIGSEGV, "SEGV", "Memory fault" },
+	[SIGUSR2] { SIGUSR2, "USR2", "User defined signal 2" },
+	[SIGPIPE] { SIGPIPE, "PIPE", "Broken pipe" },
+	[SIGALRM] { SIGALRM, "ALRM", "Alarm clock" },
+	[SIGTERM] { SIGTERM, "TERM", "Terminated" },
+	[SIGCHLD] { SIGCHLD, "CHLD", "Child exited" },
+	[SIGCONT] { SIGCONT, "CONT", "Continued" },
+	[SIGSTOP] { SIGSTOP, "STOP", "Stopped (signal)" },
+	[SIGTSTP] { SIGTSTP, "TSTP", "Stopped" },
+	[SIGTTIN] { SIGTTIN, "TTIN", "Stopped (tty input)" },
+	[SIGTTOU] { SIGTTOU, "TTOU", "Stopped (tty output)" },
+	[SIGVTALRM] { SIGVTALRM, "VTALRM", "Virtual timer expired" },
+	[SIGPROF] { SIGPROF, "PROF", "Profiling timer expired" },
+	[SIGERR_] { SIGERR_,  "ERR",  "Error handler" },
     };
 
 static struct sigaction Sigact_ign, Sigact_trap;
@@ -41,17 +42,23 @@ static struct sigaction Sigact_ign, Sigact_trap;
 void
 inittraps(void)
 {
+	int	i;
 #ifdef HAVE_SYS_SIGLIST
 # ifndef SYS_SIGLIST_DECLARED
 	extern char	*sys_siglist[];
 # endif
-	int	i;
 
 	/* Use system description, if available, for unknown signals... */
 	for (i = 0; i < NSIG; i++)
 		if (!sigtraps[i].name && sys_siglist[i] && sys_siglist[i][0])
 			sigtraps[i].mess = sys_siglist[i];
 #endif	/* HAVE_SYS_SIGLIST */
+
+	for (i = 1; i < SIGNALS; i++)
+		if (!sigtraps[i].name) {
+			sigtraps[i].signal = i;
+			sigtraps[i].mess = "Unknown signal";
+		}
 
 	sigemptyset(&Sigact_ign.sa_mask);
 	Sigact_ign.sa_flags = KSH_SA_FLAGS;
