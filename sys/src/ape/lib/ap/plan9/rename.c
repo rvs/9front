@@ -45,6 +45,54 @@ samedir(const char *from, char *f, const char *to, char *t)
 	return r;
 }
 
+/* move a directory elsewhere by moving its contents into a new one */
+static int
+movedir(const char *from, const char *to, Dir *s, Dir *d)
+{
+	Dir *db;
+	char *fe, *te;
+	long i, n;
+	int fd, r;
+
+	if(d != nil && _REMOVE(to) < 0){
+		_syserrno();
+		return -1;
+	}
+	if((fd = _CREATE(to, OREAD, DMDIR|(s->mode&0777))) < 0){
+		_syserrno();
+		return -1;
+	}
+	_CLOSE(fd);
+	if((fd = _OPEN(from, OREAD)) < 0){
+		_syserrno();
+		return -1;
+	}
+	n = _dirreadall(fd, &db);
+	_CLOSE(fd);
+	r = 0;
+	for(i = 0; i < n && r == 0; i++){
+		fe = malloc(strlen(from)+strlen(db[i].name)+2);
+		te = malloc(strlen(to)+strlen(db[i].name)+2);
+		if(fe == nil || te == nil){
+			errno = ENOMEM;
+			r = -1;
+		}else{
+			sprintf(fe, "%s/%s", from, db[i].name);
+			sprintf(te, "%s/%s", to, db[i].name);
+			r = rename(fe, te);
+		}
+		free(fe);
+		free(te);
+	}
+	if(n > 0)
+		free(db);
+	if(r == 0 && _REMOVE(from) < 0){
+		_syserrno();
+		r = -1;
+	}
+	return r;
+}
+
 int
 rename(const char *from, const char *to)
 {
@@ -97,14 +145,13 @@ rename(const char *from, const char *to)
 	}
 
 	/* different directories: have to copy */
+	if(s->mode & DMDIR){
+		if(movedir(from, to, s, d) < 0)
+			goto err;
+		goto out;
+	}
 	if((ffd = _OPEN(from, OREAD)) < 0){
 		_syserrno();
-		goto err;
-	}
-	if((s->mode & DMDIR) != 0 && _READ(ffd, buf, sizeof(buf)) > 0){
-		/* cannot copy non-empty directories */
-		errno = EXDEV;
-		_CLOSE(ffd);
 		goto err;
 	}
 	if(d != nil && _REMOVE(to) < 0){
