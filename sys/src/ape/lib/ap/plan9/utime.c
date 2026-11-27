@@ -24,7 +24,9 @@ utime(const char *path, const struct utimbuf *times)
 		nd.mtime = times->modtime;
 	}
 	n = _dirwstat(path, &nd);
-	if(n < 0)
+	if(n < 0){
 		_syserrno();
-	return n;
+		return -1;
+	}
+	return 0;
 }
