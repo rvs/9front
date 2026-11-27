@@ -10,6 +10,8 @@
 
 #include "priv.h"
 
+extern int _peekbuf(int, void*, int);
+
 int
 send(int fd, char *a, int n, int flags)
 {
@@ -27,5 +29,7 @@ recv(int fd, char *a, int n, int flags)
 		errno = EOPNOTSUPP;
 		return -1;
 	}
+	if(flags & MSG_PEEK)
+		return _peekbuf(fd, a, n);
 	return read(fd, a, n);
 }

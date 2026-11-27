@@ -240,9 +240,12 @@ _copyproc(int fd, Muxbuf *b)
 	}
 }
 
-/* like read(), for a buffered fd; extra arg noblock says don't wait for data if true */
-int
-_readbuf(int fd, void *addr, int nwant, int noblock)
+/*
+ * like read(), for a buffered fd; noblock says don't wait for data,
+ * peek says leave the data in the buffer
+ */
+static int
+readbuf(int fd, void *addr, int nwant, int noblock, int peek)
 {
 	Muxbuf *b;
 	int ngot;
@@ -292,6 +295,10 @@ goteof:
 	if(ngot > nwant)
 		ngot = nwant;
 	memcpy(addr, b->getnext, ngot);
+	if(peek){
+		unlock(&mux->lock);
+		return ngot;
+	}
 	b->getnext += ngot;
 	b->n -= ngot;
 	if(b->getnext == b->putnext && b->roomwait) {
@@ -303,6 +310,34 @@ goteof:
 	} else
 		unlock(&mux->lock);
 	return ngot;
+}
+
+int
+_readbuf(int fd, void *addr, int nwant, int noblock)
+{
+	return readbuf(fd, addr, nwant, noblock, 0);
+}
+
+/* recv(..., MSG_PEEK) */
+int
+_peekbuf(int fd, void *addr, int nwant)
+{
+	Fdinfo *f;
+
+	if(fd<0 || fd>=OPEN_MAX || !(_fdinfo[fd].flags & FD_ISOPEN)){
+		errno = EBADF;
+		return -1;
+	}
+	f = &_fdinfo[fd];
+	if(f->flags&FD_BUFFEREDX){
+		errno = EIO;
+		return -1;
+	}
+	if(!(f->flags&FD_BUFFERED) && _startbuf(fd) != 0){
+		errno = EIO;
+		return -1;
+	}
+	return readbuf(fd, addr, nwant, f->oflags&O_NONBLOCK, 1);
 }
 
 int

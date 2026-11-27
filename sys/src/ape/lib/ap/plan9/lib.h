@@ -58,6 +58,7 @@ extern int	_startbuf(int);
 extern int	_selbuf(int);
 extern void	_closebuf(int);
 extern int _readbuf(int, void*, int, int);
+extern int _peekbuf(int, void*, int);
 extern void	_detachbuf(void);
 extern void	_finish(int, char *);
 extern char	*_ultoa(char *, unsigned long);
