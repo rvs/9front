@@ -34,7 +34,10 @@ open(const char *path, int flags, ...)
 			va_start(va, flags);
 			mode = va_arg(va, int);
 			va_end(va);
-			n = _CREATE(path, f, mode&0777&~_umask);
+			mode &= 0777&~_umask;
+			n = _CREATE(path, f, mode);
+			if(n >= 0)
+				_crmode(n, mode);
 		}
 		if(n < 0)
 			_syserrno();

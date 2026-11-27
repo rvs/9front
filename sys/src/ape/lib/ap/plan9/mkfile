@@ -3,6 +3,7 @@ APE=/sys/src/ape
 LIB=/$objtype/lib/ape/libap.a
 OFILES=\
 	_buf.$O\
+	_crmode.$O\
 	_dirconv.$O\
 	_envsetup.$O\
 	_errno.$O\

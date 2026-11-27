@@ -16,10 +16,12 @@ mkdir(const char *name, mode_t mode)
 		errno = EEXIST;
 		return -1;
 	}
-	n = _CREATE(name, 0, 0x80000000|(mode&0777&~_umask));
+	mode &= 0777&~_umask;
+	n = _CREATE(name, 0, 0x80000000|mode);
 	if(n < 0)
 		_syserrno();
 	else{
+		_crmode(n, mode);
 		_CLOSE(n);
 		n = 0;
 	}
