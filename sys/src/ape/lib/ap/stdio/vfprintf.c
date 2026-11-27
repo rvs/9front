@@ -209,8 +209,10 @@ vfprintf(FILE *f, const char *s, va_list args)
 	}
 
 	if(ferror(f)){
-		if((f->flags&STRING) && f->wp==f->rp && f->wp>f->buf){
-			*(f->wp-1) = '\0';
+		/* snprintf ran out of room: truncate, return full length */
+		if((f->flags&STRING) && f->wp==f->rp){
+			if(f->wp>f->buf)
+				*(f->wp-1) = '\0';
 			return nprint;
 		}
 		return -1;
