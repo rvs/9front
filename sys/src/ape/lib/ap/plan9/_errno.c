@@ -102,6 +102,14 @@ static struct errmap {
 	{EOPNOTSUPP,	"operation not supported"},
 	{EADDRINUSE,	"address in use"},
 	{EGREG,		"unnamed error message"},
+
+	/* from lib9p, hjfs and the kernel */
+	{ENOENT,	"file not found"},
+	{EEXIST,	"already exists"},
+	{EEXIST,	"file exists"},
+	{EISDIR,	"is a directory"},
+	{ENOTDIR,	"create in non-directory"},
+	{ENOTDIR,	"walk in non-directory"},
 };
 
 #define NERRMAP	(sizeof(map)/sizeof(struct errmap))
