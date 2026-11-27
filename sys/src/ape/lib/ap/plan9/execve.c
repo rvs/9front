@@ -101,6 +101,16 @@ execve(const char *name, const char *argv[], const char *envp[])
 			_WRITE(f, buf, ss-buf);
 		_CLOSE(f);
 	}
+	f = _CREATE("/env/_umask", OWRITE|OCEXEC, 0666);
+	if(f >= 0){
+		ss = buf;
+		*ss++ = '0';
+		ss = _ultoa(ss, (_umask>>6)&7);
+		ss = _ultoa(ss, (_umask>>3)&7);
+		ss = _ultoa(ss, _umask&7);
+		_WRITE(f, buf, ss-buf);
+		_CLOSE(f);
+	}
 	if(envp){
 		for(e = (char**)envp; (ss = *e); e++) {
 			if(strncmp(ss, "#()fn ", 6)==0){
@@ -123,6 +133,11 @@ execve(const char *name, const char *argv[], const char *envp[])
 				if((se = strchr(ss, '='))==0)
 					continue;
 				n = se-ss;
+				/* written above; envp has the values at startup */
+				if(n == 7 && strncmp(ss, "_fdinfo", 7) == 0
+				|| n == 8 && strncmp(ss, "_sighdlr", 8) == 0
+				|| n == 6 && strncmp(ss, "_umask", 6) == 0)
+					continue;
 				if(n <= 0 || n >= sizeof(buf)-5)
 					continue;	/* name too long */
 				memcpy(buf, "/env/", 5);

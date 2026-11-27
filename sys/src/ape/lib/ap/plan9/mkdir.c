@@ -16,7 +16,7 @@ mkdir(const char *name, mode_t mode)
 		errno = EEXIST;
 		return -1;
 	}
-	n = _CREATE(name, 0, 0x80000000|(mode&0777));
+	n = _CREATE(name, 0, 0x80000000|(mode&0777&~_umask));
 	if(n < 0)
 		_syserrno();
 	else{

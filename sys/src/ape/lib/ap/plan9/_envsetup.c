@@ -98,6 +98,8 @@ _envsetup(void)
 			fdinited = 1;
 		} else if(strcmp(d9->name, "_sighdlr") == 0)
 			sigsetup(p+n+1, p+n+1+m);
+		else if(strcmp(d9->name, "_umask") == 0)
+			_umask = strtoul(p+n+1, 0, 8) & 0777;
 		else if(strcmp(d9->name, "nohandle") == 0)
 			nohandle = 1;
 		p += n+m+2;

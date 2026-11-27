@@ -51,6 +51,7 @@ extern Fdinfo	_fdinfo[];
 extern int	_finishing;
 extern int	_sessleader;
 extern void	(*_sighdlr[])(int, char*, Ureg*);
+extern mode_t	_umask;
 extern char	*_sigstring(int);
 extern int	_stringsig(char *);
 extern long	_psigblocked;
