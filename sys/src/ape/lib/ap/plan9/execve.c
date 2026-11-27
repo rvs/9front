@@ -30,6 +30,7 @@ execve(const char *name, const char *argv[], const char *envp[])
 	ss = buf;
 	for(i = 0; i<OPEN_MAX; i++){
 		cfd[i] = -1;
+		cflags[i] = 0;
 		if(i == f)
 			continue;
 		fi = &_fdinfo[i];
@@ -48,9 +49,6 @@ execve(const char *name, const char *argv[], const char *envp[])
 				cfd[i] = _OPEN(dname, OWRITE|OCEXEC);
 			cflags[i] = flags;
 			coflags[i] = fi->oflags;
-			_CLOSE(i);
-			fi->flags = 0;
-			fi->oflags = 0;
 		}else if(flags&FD_ISOPEN){
 			if(f < 0)
 				continue;
@@ -72,6 +70,14 @@ execve(const char *name, const char *argv[], const char *envp[])
 		if(ss > buf)
 			_WRITE(f, buf, ss-buf);
 		_CLOSE(f);
+	}
+	/* close only now, so no copy takes the number of another fd */
+	for(i = 0; i<OPEN_MAX; i++){
+		if((cflags[i]&FD_CLOEXEC) == 0)
+			continue;
+		_CLOSE(i);
+		_fdinfo[i].flags = 0;
+		_fdinfo[i].oflags = 0;
 	}
 
 	/*
