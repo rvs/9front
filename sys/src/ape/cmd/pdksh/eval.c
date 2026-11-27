@@ -143,6 +143,7 @@ typedef struct SubType {
 	short	f;		/* saved value of f (DOPAT, etc) */
 	struct tbl *var;	/* variable for ${var..} */
 	short	quote;		/* saved value of quote (for ${..[%#]..}) */
+	short	word;		/* saved value of word (for ${..[%#]..}) */
 	struct SubType *prev;	/* old type */
 	struct SubType *next;	/* poped type (to avoid re-allocating) */
 } SubType;
@@ -305,6 +306,7 @@ expand(char *cp, XPtrV *wp, int f)
 					st->f = f;
 					st->var = x.var;
 					st->quote = quote;
+					st->word = word;
 					/* skip qualifier(s) */
 					if (stype)
 						sp += slen;
@@ -373,6 +375,8 @@ expand(char *cp, XPtrV *wp, int f)
 					/* Append end-pattern */
 					*dp++ = MAGIC; *dp++ = ')'; *dp = '\0';
 					dp = Xrestpos(ds, dp, st->base);
+					/* the pattern is not part of the word */
+					word = st->word;
 					/* Must use st->var since calling
 					 * global would break things
 					 * like x[i+=1].
