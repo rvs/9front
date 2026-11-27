@@ -26,6 +26,12 @@ unlink(const char *path)
 		_syserrno();
 		return -1;
 	}
+	/* remove(2) would take an empty directory as well */
+	if(db1->mode & 0x80000000){
+		free(db1);
+		errno = EPERM;
+		return -1;
+	}
 	n = -1;
 	fd = -1;
 	for(i=0, f = _fdinfo;i < OPEN_MAX; i++, f++) {
