@@ -8,7 +8,7 @@ int fclose(FILE *f){
 
 	if(!f) return EOF;
 	if(f->state==CLOSED) return EOF;
-	if(fflush(f)==EOF) error=EOF;
+	if(!(f->flags&STRING) && fflush(f)==EOF) error=EOF;
 	if(f->flags&BALLOC){
 		if((p = f->buf)!=0){
 			f->buf = 0;
