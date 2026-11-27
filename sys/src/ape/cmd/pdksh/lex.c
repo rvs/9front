@@ -94,6 +94,50 @@ static int ignore_backslash_newline;
  * hence the state stack.
  */
 
+#ifdef KSH
+/*
+ * After "((": look ahead in the input buffered so far for
+ * "( (...) ...)", two subshells rather than an arithmetic command.
+ * The (...) closes with a single paren, (( ... )) with two.
+ */
+static int
+nestedparen(void)
+{
+	char *p;
+	int depth, q;
+
+	depth = 2;
+	q = 0;
+	for (p = source->str; p && *p; p++) {
+		if (q) {
+			if (*p == q)
+				q = 0;
+			else if (q == '"' && *p == '\\' && p[1])
+				p++;
+			continue;
+		}
+		switch (*p) {
+		case '\'':
+		case '"':
+			q = *p;
+			break;
+		case '\\':
+			if (p[1])
+				p++;
+			break;
+		case '(':
+			depth++;
+			break;
+		case ')':
+			if (--depth == 1)
+				return p[1] != ')';
+			break;
+		}
+	}
+	return 0;
+}
+#endif /* KSH */
+
 int
 yylex(int cf)
 {
@@ -704,8 +748,7 @@ Done:
 
 		  case '(':  /*)*/
 #ifdef KSH
-			if ((c2 = getsc()) == '(') /*)*/
-				/* XXX need to handle ((...); (...)) */
+			if ((c2 = getsc()) == '(' && !nestedparen()) /*)*/
 				c = MDPAREN;
 			else
 				ungetsc(c2);
