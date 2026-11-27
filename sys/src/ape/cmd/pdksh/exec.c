@@ -1427,7 +1427,7 @@ herein(const char *content, int sub)
 		s = pushs(SSTRING, ATEMP);
 		s->start = s->str = content;
 		source = s;
-		if (yylex(ONEWORD) != LWORD)
+		if (yylex(ONEWORD|HEREDOC) != LWORD)
 			internal_errorf(1, "herein: yylex");
 		source = osource;
 		shf_puts(evalstr(yylval.cp, 0), shf);

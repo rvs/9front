@@ -239,11 +239,17 @@ yylex(int cf)
 			  case '\\':
 				c = getsc();
 				switch (c) {
-				  case '"': case '\\':
+				  case '"':
+					/* a here document keeps \" */
+					if (cf & HEREDOC)
+						goto Bslash;
+					/* fall through */
+				  case '\\':
 				  case '$': case '`':
 					*wp++ = QCHAR, *wp++ = c;
 					break;
 				  default:
+				  Bslash:
 					Xcheck(ws, wp);
 					if (c) { /* trailing \ is lost */
 						*wp++ = CHAR, *wp++ = '\\';

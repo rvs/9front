@@ -113,6 +113,7 @@ typedef union {
 #define ESACONLY BIT(7)		/* only accept esac keyword */
 #define CMDWORD BIT(8)		/* parsing simple command (alias related) */
 #define HEREDELIM BIT(9)	/* parsing <<,<<- delimiter */
+#define HEREDOC BIT(10)		/* ONEWORD: here document body */
 
 #define	HERES	10		/* max << in line */
 
