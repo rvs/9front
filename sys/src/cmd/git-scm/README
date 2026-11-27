@@ -1,0 +1,52 @@
+git-scm: Git 2.56.1 for 9front, built with APE
+
+This is a subset of the Git sources: what is needed to build git
+and its helper programs with pcc, plus the shell scripts and
+templates Git installs.  The tests, documentation, translations,
+Perl, Python and Tcl parts are left out.  COPYING has Git's licence.
+
+Build and install:
+
+	cd /sys/src/cmd/git-scm
+	mk install
+
+This needs the C99 additions to cc and the APE fixes of the same
+tree.  Programs and scripts go in /$objtype/bin/git-scm, templates
+in /sys/lib/git-scm/share/git-core/templates, and the system-wide
+configuration is read from /sys/lib/git-scm/etc/gitconfig.
+
+/bin/git is already taken by git(1), the native implementation, so
+put this one in front of it where you want it:
+
+	bind -b /bin/git-scm /bin
+
+The scripts and some commands (rebase -i, mergetool, filter-branch)
+run /bin/ape/sh and expect POSIX tools such as sed and awk in $path.
+Output is not paged unless GIT_PAGER or core.pager says so (try p).
+Git uses its default editor, ed, only when TERM is set, so set
+EDITOR, GIT_EDITOR or core.editor for commit messages.
+
+Not available: http and https transports (no curl), threads, gettext,
+iconv, mmap, symbolic links, and the fsmonitor daemon.  The local
+and git:// transports work; ssh is untested.
+
+The Plan 9 changes to Git are in plan9/ (headers that complete APE
+and a few compat functions) and small portability fixes in Git
+proper:
+	- function pointer types made to match (odb/source-packed.c,
+	  config.c)
+	- on-disk headers packed to 4 bytes (pack.h, read-cache-ll.h,
+	  pack-revindex.c); 6c pads structures to 8
+	- CSPRNG_DEVICE to read /dev/random
+	- clone copies objects instead of hard linking them
+	- range-diff sizes its memory limit by size_t, which is 32 bits
+
+This directory is generated, mkfile included, from a Git tree that
+carries these changes, by plan9/vendor.sh run on a Unix host with
+GNU make and Python:
+
+	plan9/vendor.sh /path/to/9front/sys/src/cmd/git-scm
+
+Git's Makefile, with the settings in config.mak (NO_CURL,
+NO_PTHREADS, NO_MMAP, NO_REGEX, ...), decides the objects and the
+compiler flags for each file.

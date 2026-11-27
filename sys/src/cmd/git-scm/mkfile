@@ -1,0 +1,608 @@
+</$objtype/mkfile
+
+BIN=/$objtype/bin/git-scm
+LIB=/sys/lib/git-scm
+CC=pcc
+LD=pcc
+ENDIAN=`{if(~ $objtype mips power power64 sparc) echo -D_BIG_ENDIAN -DSHA1DC_FORCE_BIGENDIAN; if not echo -D_LITTLE_ENDIAN}
+APEFLAGS=-+ -B -D_POSIX_SOURCE -D_POSIX_C_SOURCE=200112L -D_BSD_EXTENSION -D_SUSV2_SOURCE\
+	-D_C99_SNPRINTF_EXTENSION -D_LIMITS_EXTENSION -D_REENTRANT_SOURCE -D_RESEARCH_SOURCE\
+	-D__STDC_VERSION__=199901L -D__plan9__ $ENDIAN -DHAVE_SOCK_OPTS -Dtypestr=typestr_
+GITFLAGS=-Iplan9 '-DCSPRNG_DEVICE="/dev/random"' '-DSHELL_PATH="/bin/ape/sh"'\
+	'-I.' \
+	'-DNO_CURL' \
+	'-DNO_OPENSSL' \
+	'-DNO_D_TYPE_IN_DIRENT' \
+	'-DNO_GECOS_IN_PWENT' \
+	'-DNO_ST_BLOCKS_IN_STRUCT_STAT' \
+	'-DNO_NSEC' \
+	'-DNO_SYMLINK_HEAD' \
+	'-DNO_GETTEXT' \
+	'-DNO_POLL_H' \
+	'-DNO_SYS_POLL_H' \
+	'-DNO_INITGROUPS' \
+	'-DNO_TRUSTABLE_FILEMODE' \
+	'-DNO_IPV6' \
+	'-DNO_UNIX_SOCKETS' \
+	'-DNO_ICONV' \
+	'-DNO_DEFLATE_BOUND' \
+	'-DNO_POSIX_GOODIES' \
+	'-DSHA1_DC' \
+	'-DSHA1DC_NO_STANDARD_INCLUDES' \
+	'-DSHA1DC_INIT_SAFE_HASH_DEFAULT=0' \
+	'-DSHA1DC_CUSTOM_INCLUDE_SHA1_C="git-compat-util.h"' \
+	'-DSHA1DC_CUSTOM_INCLUDE_UBC_CHECK_C="git-compat-util.h"' \
+	'-DSHA256_BLK' \
+	'-DNO_PTHREADS' \
+	'-DNO_LIBGEN_H' \
+	'-DNO_POLL' \
+	'-Icompat/poll' \
+	'-DNO_STRCASESTR' \
+	'-DNO_STRLCPY' \
+	'-DNO_STRTOUMAX' \
+	'-DNO_SETENV' \
+	'-DNO_MKDTEMP' \
+	'-DNO_UNSETENV' \
+	'-DNO_MMAP' \
+	'-DNO_SETITIMER' \
+	'-DNO_PREAD' \
+	'-DNO_WRITEV' \
+	'-DNO_HSTRERROR' \
+	'-DNO_MEMMEM' \
+	'-Icompat/regex' \
+	'-DDEFAULT_EDITOR="ed"' \
+	'-DDEFAULT_PAGER="cat"'
+CFLAGS=$APEFLAGS $GITFLAGS
+
+PROGS=git git-daemon git-http-backend git-imap-send git-sh-i18n--envsubst git-shell
+SCRIPTS=\
+	git-difftool--helper \
+	git-filter-branch \
+	git-merge-octopus \
+	git-merge-one-file \
+	git-merge-resolve \
+	git-mergetool \
+	git-quiltimport \
+	git-request-pull \
+	git-submodule \
+	git-web--browse \
+	git-sh-setup \
+	git-sh-i18n \
+	git-mergetool--lib
+TMPLDIRS=templates templates/hooks templates/info
+TMPLFILES=\
+	templates/description \
+	templates/hooks/applypatch-msg.sample \
+	templates/hooks/commit-msg.sample \
+	templates/hooks/fsmonitor-watchman.sample \
+	templates/hooks/post-update.sample \
+	templates/hooks/pre-applypatch.sample \
+	templates/hooks/pre-commit.sample \
+	templates/hooks/pre-merge-commit.sample \
+	templates/hooks/pre-push.sample \
+	templates/hooks/pre-rebase.sample \
+	templates/hooks/pre-receive.sample \
+	templates/hooks/prepare-commit-msg.sample \
+	templates/hooks/push-to-checkout.sample \
+	templates/hooks/sendemail-validate.sample \
+	templates/hooks/update.sample \
+	templates/info/exclude
+DASHED=upload-pack receive-pack upload-archive
+OFILES=\
+	builtin/add.$O \
+	builtin/am.$O \
+	builtin/annotate.$O \
+	builtin/apply.$O \
+	builtin/archive.$O \
+	builtin/backfill.$O \
+	builtin/bisect.$O \
+	builtin/blame.$O \
+	builtin/branch.$O \
+	builtin/bugreport.$O \
+	builtin/bundle.$O \
+	builtin/cat-file.$O \
+	builtin/check-attr.$O \
+	builtin/check-ignore.$O \
+	builtin/check-mailmap.$O \
+	builtin/check-ref-format.$O \
+	builtin/checkout--worker.$O \
+	builtin/checkout-index.$O \
+	builtin/checkout.$O \
+	builtin/clean.$O \
+	builtin/clone.$O \
+	builtin/column.$O \
+	builtin/commit-graph.$O \
+	builtin/commit-tree.$O \
+	builtin/commit.$O \
+	builtin/config.$O \
+	builtin/count-objects.$O \
+	builtin/credential-cache--daemon.$O \
+	builtin/credential-cache.$O \
+	builtin/credential-store.$O \
+	builtin/credential.$O \
+	builtin/describe.$O \
+	builtin/diagnose.$O \
+	builtin/diff-files.$O \
+	builtin/diff-index.$O \
+	builtin/diff-pairs.$O \
+	builtin/diff-tree.$O \
+	builtin/diff.$O \
+	builtin/difftool.$O \
+	builtin/fast-export.$O \
+	builtin/fast-import.$O \
+	builtin/fetch-pack.$O \
+	builtin/fetch.$O \
+	builtin/fmt-merge-msg.$O \
+	builtin/for-each-ref.$O \
+	builtin/for-each-repo.$O \
+	builtin/fsck.$O \
+	builtin/fsmonitor--daemon.$O \
+	builtin/gc.$O \
+	builtin/get-tar-commit-id.$O \
+	builtin/grep.$O \
+	builtin/hash-object.$O \
+	builtin/help.$O \
+	builtin/history.$O \
+	builtin/hook.$O \
+	builtin/index-pack.$O \
+	builtin/init-db.$O \
+	builtin/interpret-trailers.$O \
+	builtin/last-modified.$O \
+	builtin/log.$O \
+	builtin/ls-files.$O \
+	builtin/ls-remote.$O \
+	builtin/ls-tree.$O \
+	builtin/mailinfo.$O \
+	builtin/mailsplit.$O \
+	builtin/merge-base.$O \
+	builtin/merge-file.$O \
+	builtin/merge-index.$O \
+	builtin/merge-ours.$O \
+	builtin/merge-recursive.$O \
+	builtin/merge-tree.$O \
+	builtin/merge.$O \
+	builtin/mktag.$O \
+	builtin/mktree.$O \
+	builtin/multi-pack-index.$O \
+	builtin/mv.$O \
+	builtin/name-rev.$O \
+	builtin/notes.$O \
+	builtin/pack-objects.$O \
+	builtin/pack-redundant.$O \
+	builtin/pack-refs.$O \
+	builtin/patch-id.$O \
+	builtin/prune-packed.$O \
+	builtin/prune.$O \
+	builtin/pull.$O \
+	builtin/push.$O \
+	builtin/range-diff.$O \
+	builtin/read-tree.$O \
+	builtin/rebase.$O \
+	builtin/receive-pack.$O \
+	builtin/reflog.$O \
+	builtin/refs.$O \
+	builtin/remote-ext.$O \
+	builtin/remote-fd.$O \
+	builtin/remote.$O \
+	builtin/repack.$O \
+	builtin/replace.$O \
+	builtin/replay.$O \
+	builtin/repo.$O \
+	builtin/rerere.$O \
+	builtin/reset.$O \
+	builtin/rev-list.$O \
+	builtin/rev-parse.$O \
+	builtin/revert.$O \
+	builtin/rm.$O \
+	builtin/send-pack.$O \
+	builtin/shortlog.$O \
+	builtin/show-branch.$O \
+	builtin/show-index.$O \
+	builtin/show-ref.$O \
+	builtin/sparse-checkout.$O \
+	builtin/stash.$O \
+	builtin/stripspace.$O \
+	builtin/submodule--helper.$O \
+	builtin/symbolic-ref.$O \
+	builtin/tag.$O \
+	builtin/unpack-file.$O \
+	builtin/unpack-objects.$O \
+	builtin/update-index.$O \
+	builtin/update-ref.$O \
+	builtin/update-server-info.$O \
+	builtin/upload-archive.$O \
+	builtin/upload-pack.$O \
+	builtin/url-parse.$O \
+	builtin/var.$O \
+	builtin/verify-commit.$O \
+	builtin/verify-pack.$O \
+	builtin/verify-tag.$O \
+	builtin/worktree.$O \
+	builtin/write-tree.$O \
+	abspath.$O \
+	add-interactive.$O \
+	add-patch.$O \
+	advice.$O \
+	alias.$O \
+	alloc.$O \
+	apply.$O \
+	archive-tar.$O \
+	archive-zip.$O \
+	archive.$O \
+	attr.$O \
+	base85.$O \
+	bisect.$O \
+	blame.$O \
+	blob.$O \
+	bloom.$O \
+	branch.$O \
+	bundle-uri.$O \
+	bundle.$O \
+	cache-tree.$O \
+	cbtree.$O \
+	chdir-notify.$O \
+	checkout.$O \
+	chunk-format.$O \
+	color.$O \
+	column.$O \
+	combine-diff.$O \
+	commit-graph.$O \
+	commit-reach.$O \
+	commit.$O \
+	common-exit.$O \
+	common-init.$O \
+	compat/nonblock.$O \
+	compat/obstack.$O \
+	compat/open.$O \
+	compat/terminal.$O \
+	compiler-tricks/not-constant.$O \
+	config.$O \
+	connect.$O \
+	connected.$O \
+	convert.$O \
+	copy.$O \
+	credential.$O \
+	csum-file.$O \
+	ctype.$O \
+	date.$O \
+	decorate.$O \
+	delta-islands.$O \
+	diagnose.$O \
+	diff-delta.$O \
+	diff-merges.$O \
+	diff-lib.$O \
+	diff-no-index.$O \
+	diff.$O \
+	diffcore-break.$O \
+	diffcore-delta.$O \
+	diffcore-order.$O \
+	diffcore-pickaxe.$O \
+	diffcore-rename.$O \
+	diffcore-rotate.$O \
+	dir-iterator.$O \
+	dir.$O \
+	editor.$O \
+	entry.$O \
+	environment.$O \
+	ewah/bitmap.$O \
+	ewah/ewah_bitmap.$O \
+	ewah/ewah_io.$O \
+	ewah/ewah_rlw.$O \
+	exec-cmd.$O \
+	fetch-negotiator.$O \
+	fetch-object-info.$O \
+	fetch-pack.$O \
+	fmt-merge-msg.$O \
+	fsck.$O \
+	fsmonitor.$O \
+	fsmonitor-ipc.$O \
+	fsmonitor-settings.$O \
+	gettext.$O \
+	git-zlib.$O \
+	gpg-interface.$O \
+	graph.$O \
+	grep.$O \
+	hash-lookup.$O \
+	hash.$O \
+	hashmap.$O \
+	help.$O \
+	hex.$O \
+	hex-ll.$O \
+	hook.$O \
+	ident.$O \
+	json-writer.$O \
+	kwset.$O \
+	levenshtein.$O \
+	line-log.$O \
+	line-range.$O \
+	linear-assignment.$O \
+	list-objects-filter-options.$O \
+	list-objects-filter.$O \
+	list-objects.$O \
+	lockfile.$O \
+	log-tree.$O \
+	loose.$O \
+	ls-refs.$O \
+	mailinfo.$O \
+	mailmap.$O \
+	match-trees.$O \
+	mem-pool.$O \
+	merge-blobs.$O \
+	merge-ll.$O \
+	merge-ort.$O \
+	merge-ort-wrappers.$O \
+	merge.$O \
+	midx.$O \
+	midx-write.$O \
+	name-hash.$O \
+	negotiator/default.$O \
+	negotiator/noop.$O \
+	negotiator/skipping.$O \
+	notes-cache.$O \
+	notes-merge.$O \
+	notes-utils.$O \
+	notes.$O \
+	object-file-convert.$O \
+	object-file.$O \
+	object-name.$O \
+	object.$O \
+	odb.$O \
+	odb/source.$O \
+	odb/source-files.$O \
+	odb/source-inmemory.$O \
+	odb/source-loose.$O \
+	odb/source-packed.$O \
+	odb/streaming.$O \
+	odb/transaction.$O \
+	oid-array.$O \
+	oidmap.$O \
+	oidset.$O \
+	oidtree.$O \
+	pack-bitmap-write.$O \
+	pack-bitmap.$O \
+	pack-check.$O \
+	pack-mtimes.$O \
+	pack-objects.$O \
+	pack-refs.$O \
+	pack-revindex.$O \
+	pack-write.$O \
+	packfile.$O \
+	packfile-list.$O \
+	pager.$O \
+	parallel-checkout.$O \
+	parse.$O \
+	parse-options-cb.$O \
+	parse-options.$O \
+	patch-delta.$O \
+	patch-ids.$O \
+	path.$O \
+	path-walk.$O \
+	pathspec.$O \
+	pkt-line.$O \
+	preload-index.$O \
+	pretty.$O \
+	prio-queue.$O \
+	progress.$O \
+	promisor-remote.$O \
+	prompt.$O \
+	protocol.$O \
+	protocol-caps.$O \
+	prune-packed.$O \
+	pseudo-merge.$O \
+	quote.$O \
+	range-diff.$O \
+	reachable.$O \
+	read-cache.$O \
+	rebase-interactive.$O \
+	rebase.$O \
+	ref-filter.$O \
+	reflog-walk.$O \
+	reflog.$O \
+	refs.$O \
+	refs/debug.$O \
+	refs/files-backend.$O \
+	refs/reftable-backend.$O \
+	refs/iterator.$O \
+	refs/packed-backend.$O \
+	refs/ref-cache.$O \
+	refspec.$O \
+	reftable/basics.$O \
+	reftable/block.$O \
+	reftable/blocksource.$O \
+	reftable/error.$O \
+	reftable/fsck.$O \
+	reftable/iter.$O \
+	reftable/merged.$O \
+	reftable/pq.$O \
+	reftable/record.$O \
+	reftable/stack.$O \
+	reftable/system.$O \
+	reftable/table.$O \
+	reftable/tree.$O \
+	reftable/writer.$O \
+	remote.$O \
+	repack.$O \
+	repack-cruft.$O \
+	repack-filtered.$O \
+	repack-geometry.$O \
+	repack-midx.$O \
+	repack-promisor.$O \
+	replace-object.$O \
+	replay.$O \
+	repo-settings.$O \
+	repository.$O \
+	rerere.$O \
+	reset.$O \
+	resolve-undo.$O \
+	revision.$O \
+	run-command.$O \
+	send-pack.$O \
+	sequencer.$O \
+	serve.$O \
+	server-info.$O \
+	setup.$O \
+	shallow.$O \
+	sideband.$O \
+	sigchain.$O \
+	sparse-index.$O \
+	split-index.$O \
+	stable-qsort.$O \
+	statinfo.$O \
+	strbuf.$O \
+	string-list.$O \
+	strmap.$O \
+	strvec.$O \
+	sub-process.$O \
+	submodule-config.$O \
+	submodule.$O \
+	symlinks.$O \
+	tag.$O \
+	tempfile.$O \
+	thread-utils.$O \
+	tmp-objdir.$O \
+	trace.$O \
+	trace2.$O \
+	trace2/tr2_cfg.$O \
+	trace2/tr2_cmd_name.$O \
+	trace2/tr2_ctr.$O \
+	trace2/tr2_dst.$O \
+	trace2/tr2_sid.$O \
+	trace2/tr2_sysenv.$O \
+	trace2/tr2_tbuf.$O \
+	trace2/tr2_tgt_event.$O \
+	trace2/tr2_tgt_normal.$O \
+	trace2/tr2_tgt_perf.$O \
+	trace2/tr2_tls.$O \
+	trace2/tr2_tmr.$O \
+	trailer.$O \
+	transport-helper.$O \
+	transport.$O \
+	tree-diff.$O \
+	tree-walk.$O \
+	tree.$O \
+	unpack-trees.$O \
+	upload-pack.$O \
+	url.$O \
+	urlmatch.$O \
+	usage.$O \
+	userdiff.$O \
+	utf8.$O \
+	varint.$O \
+	version.$O \
+	versioncmp.$O \
+	walker.$O \
+	wildmatch.$O \
+	worktree.$O \
+	wrapper.$O \
+	write-or-die.$O \
+	ws.$O \
+	wt-status.$O \
+	xdiff-interface.$O \
+	xdiff/xdiffi.$O \
+	xdiff/xemit.$O \
+	xdiff/xhistogram.$O \
+	xdiff/xmerge.$O \
+	xdiff/xpatience.$O \
+	xdiff/xprepare.$O \
+	xdiff/xutils.$O \
+	sha1dc_git.$O \
+	sha1dc/sha1.$O \
+	sha1dc/ubc_check.$O \
+	sha256/block/sha256.$O \
+	compat/basename.$O \
+	compat/poll/poll.$O \
+	compat/strcasestr.$O \
+	compat/strlcpy.$O \
+	compat/strtoumax.$O \
+	compat/strtoimax.$O \
+	compat/setenv.$O \
+	compat/unsetenv.$O \
+	compat/mmap.$O \
+	compat/pread.$O \
+	compat/writev.$O \
+	compat/hstrerror.$O \
+	compat/memmem.$O \
+	compat/qsort_s.$O \
+	compat/regex/regex.$O \
+	compat/stub/procinfo.$O \
+	plan9/compat.$O
+
+all:V: $PROGS
+
+git: git.$O common-main.$O libgit.a$O
+	$LD -o $target $prereq -lz
+
+git-daemon: daemon.$O common-main.$O libgit.a$O
+	$LD -o $target $prereq -lz
+
+git-http-backend: http-backend.$O common-main.$O libgit.a$O
+	$LD -o $target $prereq -lz
+
+git-imap-send: imap-send.$O common-main.$O libgit.a$O
+	$LD -o $target $prereq -lz
+
+git-sh-i18n--envsubst: sh-i18n--envsubst.$O common-main.$O libgit.a$O
+	$LD -o $target $prereq -lz
+
+git-shell: shell.$O common-main.$O libgit.a$O
+	$LD -o $target $prereq -lz
+
+libgit.a$O: $OFILES
+	ar vu $target $newprereq
+
+%.$O: %.c
+	$CC $CFLAGS -c -o $target $stem.c
+
+git.$O: git.c
+	$CC $CFLAGS '-DGIT_HTML_PATH="share/doc/git-doc"' '-DGIT_MAN_PATH="share/man"' '-DGIT_INFO_PATH="share/info"' -c -o $target git.c
+
+builtin/help.$O: builtin/help.c
+	$CC $CFLAGS '-DGIT_HTML_PATH="share/doc/git-doc"' '-DGIT_MAN_PATH="share/man"' '-DGIT_INFO_PATH="share/info"' -c -o $target builtin/help.c
+
+attr.$O: attr.c
+	$CC $CFLAGS '-DETC_GITATTRIBUTES="etc/gitattributes"' -c -o $target attr.c
+
+config.$O: config.c
+	$CC $CFLAGS '-DETC_GITCONFIG="etc/gitconfig"' -c -o $target config.c
+
+exec-cmd.$O: exec-cmd.c
+	$CC $CFLAGS '-DGIT_EXEC_PATH="/bin/git-scm"' '-DGIT_LOCALE_PATH="share/locale"' '-DBINDIR="/bin/git-scm"' '-DFALLBACK_RUNTIME_PREFIX="/sys/lib/git-scm"' -c -o $target exec-cmd.c
+
+gettext.$O: gettext.c
+	$CC $CFLAGS '-DGIT_LOCALE_PATH="share/locale"' -c -o $target gettext.c
+
+help.$O: help.c
+	$CC $CFLAGS '-DGIT_HOST_CPU="'$objtype'"'  -c -o $target help.c
+
+pager.$O: pager.c
+	$CC $CFLAGS '-DPAGER_ENV="LESS=FRX LV=-c"' -c -o $target pager.c
+
+setup.$O: setup.c
+	$CC $CFLAGS '-DDEFAULT_GIT_TEMPLATE_DIR="share/git-core/templates"' -c -o $target setup.c
+
+compat/regex/regex.$O: compat/regex/regex.c
+	$CC $CFLAGS '-DGAWK' '-DNO_MBSUPPORT' -c -o $target compat/regex/regex.c
+
+install:V: all
+	mkdir -p $BIN $LIB/share/git-core
+	for(i in $PROGS) cp $i $BIN/$i
+	for(i in $SCRIPTS) {
+		cp scripts/$i $BIN/$i
+		chmod +x $BIN/$i
+	}
+	for(i in $DASHED) {
+		echo '#!/bin/rc' >$BIN/git-$i
+		echo 'exec /bin/git-scm/git '$i' $*' >>$BIN/git-$i
+		chmod +x $BIN/git-$i
+	}
+	rm -rf $LIB/share/git-core/templates
+	for(i in $TMPLDIRS) mkdir -p $LIB/share/git-core/$i
+	for(i in $TMPLFILES) cp $i $LIB/share/git-core/$i
+
+installall:V:
+	for(objtype in $CPUS) mk $MKFLAGS install
+
+clean:V:
+	rm -f $PROGS libgit.a[$OS] *.[$OS] */*.[$OS] */*/*.[$OS]
+
+nuke:V: clean
