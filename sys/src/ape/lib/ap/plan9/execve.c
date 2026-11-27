@@ -3,6 +3,7 @@
 #include <errno.h>
 #include <string.h>
 #include <signal.h>
+#include <fcntl.h>
 #include "sys9.h"
 
 extern char **environ;
@@ -14,7 +15,9 @@ execve(const char *name, const char *argv[], const char *envp[])
 	char **e, *ss, *se;
 	Fdinfo *fi;
 	unsigned long flags;
-	char buf[1024];
+	char buf[1024], dname[16];
+	int cfd[OPEN_MAX];
+	unsigned long cflags[OPEN_MAX], coflags[OPEN_MAX];
 
 	_RFORK(RFCENVG);
 	/*
@@ -26,11 +29,25 @@ execve(const char *name, const char *argv[], const char *envp[])
 	f = _CREATE("/env/_fdinfo", OWRITE|OCEXEC, 0666);
 	ss = buf;
 	for(i = 0; i<OPEN_MAX; i++){
+		cfd[i] = -1;
 		if(i == f)
 			continue;
 		fi = &_fdinfo[i];
 		flags = fi->flags;
 		if(flags&FD_CLOEXEC){
+			/*
+			 * Let the kernel close it on a successful exec
+			 * and keep it, to be put back, if exec fails.
+			 */
+			strcpy(dname, "#d/");
+			_ultoa(dname+3, i)[0] = 0;
+			cfd[i] = _OPEN(dname, (fi->oflags&O_ACCMODE)|OCEXEC);
+			if(cfd[i] < 0)
+				cfd[i] = _OPEN(dname, OREAD|OCEXEC);
+			if(cfd[i] < 0)
+				cfd[i] = _OPEN(dname, OWRITE|OCEXEC);
+			cflags[i] = flags;
+			coflags[i] = fi->oflags;
 			_CLOSE(i);
 			fi->flags = 0;
 			fi->oflags = 0;
@@ -133,5 +150,13 @@ execve(const char *name, const char *argv[], const char *envp[])
 	}
 	n = _EXEC(name, argv);
 	_syserrno();
+	for(i = 0; i<OPEN_MAX; i++){
+		if(cfd[i] < 0)
+			continue;
+		_DUP(cfd[i], i);
+		_CLOSE(cfd[i]);
+		_fdinfo[i].flags = cflags[i];
+		_fdinfo[i].oflags = coflags[i];
+	}
 	return n;
 }
