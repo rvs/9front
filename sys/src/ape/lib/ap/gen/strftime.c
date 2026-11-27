@@ -9,7 +9,6 @@ static char *amon[12] = { "Jan", "Feb", "Mar", "Apr", "May", "Jun",
 static char *mon[12] = {"January", "February", "March", "April", "May", "June",
 		"July", "August", "September", "October", "November", "December"};
 static char *ampm[2] = {"AM", "PM"};
-static char *tz[2] = {"EST", "EDT"};
 
 static int jan1(int);
 static char *strval(char *, char *, char **, int, int);
@@ -110,9 +109,9 @@ strftime(char *s, size_t maxsize, const char *format, const struct tm *t)
 				sp = dval(sp, se, t->tm_year+1900, 4);
 				break;
 			case 'Z':
-				/* hack for now: assume eastern time zone */
+				tzset();
 				i = t->tm_isdst? 1 : 0;
-				sp = strval(sp, se, tz, i, 2);
+				sp = strval(sp, se, tzname, i, 2);
 				break;
 			case 0:
 				fp--; /* stop loop after next fp incr */

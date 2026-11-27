@@ -61,8 +61,8 @@ static	int	rdposixtz(char*);
 static
 struct
 {
-	char	stname[4];
-	char	dlname[4];
+	char	stname[16];
+	char	dlname[16];
 	long	stdiff;
 	long	dldiff;
 	long	dlpairs[TZSIZE];
@@ -269,6 +269,18 @@ error:
 	tz.dlpairs[0] = 0;
 }
 
+/* zone names and offsets east of UTC, as used by localtime */
+void
+_tzinfo(int reread, char **stname, char **dlname, long *stdiff, long *dldiff)
+{
+	if(reread || tz.stname[0] == 0)
+		readtimezone();
+	*stname = tz.stname;
+	*dlname = tz.dlname[0] != 0 ? tz.dlname : tz.stname;
+	*stdiff = tz.stdiff;
+	*dldiff = tz.dlname[0] != 0 ? tz.dldiff : tz.stdiff;
+}
+
 static
 rd_name(char **f, char *p)
 {
@@ -366,13 +378,13 @@ rdposixname(char **f, char *n)
 		for(p++; *p != '>'; p++){
 			if(*p == 0)
 				return 1;
-			if(i < 3)
+			if(i < sizeof tz.stname - 1)
 				n[i++] = *p;
 		}
 		p++;
 	}else
 		for(; (c = *p) >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z'; p++)
-			if(i < 3)
+			if(i < sizeof tz.stname - 1)
 				n[i++] = c;
 	n[i] = 0;
 	*f = p;
