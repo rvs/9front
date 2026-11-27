@@ -15,7 +15,11 @@ write(int d, const void *buf, size_t nbytes)
 	if(_fdinfo[d].oflags&O_APPEND)
 		_SEEK(d, 0, 2);
 	n = _WRITE(d, buf, nbytes);
-	if(n < 0)
+	if(n < 0){
 		_syserrno();
+		/* no reader at the other end */
+		if(errno == ESHUTDOWN)
+			errno = EPIPE;
+	}
 	return n;
 }
