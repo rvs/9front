@@ -18,6 +18,23 @@ be2vlong(vlong *to, uchar *f)
 		t[o[i]] = f[i];
 }
 
+static char bintime[] = "/dev/bintime";
+
+/* the program may have closed or dup2ed over the cached fd */
+static int
+stillopen(int fd)
+{
+	char buf[64];
+	int i;
+
+	if(fd < 0 || _FD2PATH(fd, buf, sizeof buf) < 0)
+		return 0;
+	for(i = 0; bintime[i] != 0; i++)
+		if(buf[i] != bintime[i])
+			return 0;
+	return buf[i] == 0;
+}
+
 long long
 _NSEC(void)
 {
@@ -27,10 +44,12 @@ _NSEC(void)
 	static int fd = -1;
 
 	opened = 0;
+	if(!stillopen(fd))
+		fd = -1;
 	for(;;) {
 		if(fd < 0)
 			if(opened++ ||
-			    (fd = _OPEN("/dev/bintime", OREAD|OCEXEC)) < 0)
+			    (fd = _OPEN(bintime, OREAD|OCEXEC)) < 0)
 				return 0;
 		if(_PREAD(fd, b, sizeof b, 0) == sizeof b)
 			break;		/* leave fd open for future use */
