@@ -646,7 +646,6 @@ c_unset(char **wp)
 {
 	register char *id;
 	int optc, unset_var = 1;
-	int ret = 0;
 
 	while ((optc = ksh_getopt(wp, &builtin_opt, "fv")) != EOF)
 		switch (optc) {
@@ -664,18 +663,14 @@ c_unset(char **wp)
 		if (unset_var) {	/* unset variable */
 			struct tbl *vp = global(id);
 
-			if (!(vp->flag & ISSET))
-			    ret = 1;
 			if ((vp->flag&RDONLY)) {
 				bi_errorf("%s is read only", vp->name);
 				return 1;
 			}
 			unset(vp, strchr(id, '[') ? 1 : 0);
-		} else {		/* unset function */
-			if (define(id, (struct op *) NULL))
-				ret = 1;
-		}
-	return ret;
+		} else			/* unset function */
+			define(id, (struct op *) NULL);
+	return 0;
 }
 
 int
