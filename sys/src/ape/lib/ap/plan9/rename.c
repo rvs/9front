@@ -7,6 +7,44 @@
 #include "sys9.h"
 #include "dir.h"
 
+/* stat the directory holding the last element e of path */
+static Dir*
+statparent(const char *path, char *e)
+{
+	char buf[8192];
+	int n;
+
+	n = e-path;
+	if(n == 0)
+		return _dirstat(".");
+	if(n == 1)
+		return _dirstat("/");
+	if(n-1 >= sizeof(buf))
+		return nil;
+	memmove(buf, path, n-1);
+	buf[n-1] = 0;
+	return _dirstat(buf);
+}
+
+static int
+samedir(const char *from, char *f, const char *to, char *t)
+{
+	Dir *a, *b;
+	int r;
+
+	if(f-from==t-to && strncmp(from, to, f-from)==0)
+		return 1;
+	a = statparent(from, f);
+	b = statparent(to, t);
+	r = a != nil && b != nil
+		&& a->qid.path == b->qid.path
+		&& a->type == b->type
+		&& a->dev == b->dev;
+	free(a);
+	free(b);
+	return r;
+}
+
 int
 rename(const char *from, const char *to)
 {
@@ -43,8 +81,8 @@ rename(const char *from, const char *to)
 		}
 	}
 
-	/* from and to are in same directory (we miss some cases) */
-	if(f-from==t-to && strncmp(from, to, f-from)==0){
+	/* from and to are in the same directory: just rename */
+	if(samedir(from, f, to, t)){
 		if(d != nil && _REMOVE(to) < 0){
 			_syserrno();
 			goto err;
